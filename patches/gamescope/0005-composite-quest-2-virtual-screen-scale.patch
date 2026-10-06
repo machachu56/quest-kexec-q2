@@ -1,0 +1,67 @@
+diff -ruN a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+--- a/src/rendervulkan.cpp	2026-10-07 00:11:11.759012901 +0200
++++ b/src/rendervulkan.cpp	2026-10-07 00:11:11.793892242 +0200
+@@ -1161,7 +1161,16 @@
+ 	static const uint32_t s_uQkxStereo =
+ 		( env_to_bool( getenv( "GAMESCOPE_QKX_STEREO" ) ) ? CompositeDebugFlag::QkxStereo : 0u ) |
+ 		( env_to_bool( getenv( "GAMESCOPE_QKX_FLIPX" ) ) ? CompositeDebugFlag::QkxFlipX : 0u ) |
+-		( env_to_bool( getenv( "GAMESCOPE_QKX_FLIPY" ) ) ? CompositeDebugFlag::QkxFlipY : 0u );
++		( env_to_bool( getenv( "GAMESCOPE_QKX_FLIPY" ) ) ? CompositeDebugFlag::QkxFlipY : 0u ) |
++		[]() -> uint32_t {
++			// GAMESCOPE_QKX_SCALE=<percent>: nearest of 100, 85, 70, 55.
++			const char *pszScale = getenv( "GAMESCOPE_QKX_SCALE" );
++			int nPercent = pszScale ? atoi( pszScale ) : 100;
++			if ( nPercent >= 93 ) return 0u;
++			if ( nPercent >= 78 ) return CompositeDebugFlag::QkxScale1;
++			if ( nPercent >= 63 ) return CompositeDebugFlag::QkxScale2;
++			return CompositeDebugFlag::QkxScale1 | CompositeDebugFlag::QkxScale2;
++		}();
+ 	effective_debug |= s_uQkxStereo;
+ 	if ( g_bSteamIsActiveWindow )
+ 		effective_debug &= ~(CompositeDebugFlag::Heatmap | CompositeDebugFlag::Heatmap_MSWCG | CompositeDebugFlag::Heatmap_Hard);
+diff -ruN a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+--- a/src/rendervulkan.hpp	2026-10-07 00:11:11.757822929 +0200
++++ b/src/rendervulkan.hpp	2026-10-07 00:11:11.791010166 +0200
+@@ -387,6 +387,8 @@
+ 	static constexpr uint32_t QkxStereo = 1u << 8;
+ 	static constexpr uint32_t QkxFlipX = 1u << 9;
+ 	static constexpr uint32_t QkxFlipY = 1u << 10;
++	static constexpr uint32_t QkxScale1 = 1u << 11;
++	static constexpr uint32_t QkxScale2 = 1u << 12;
+ };
+ 
+ VkInstance vulkan_get_instance(void);
+diff -ruN a/src/shaders/cs_composite_blit.comp b/src/shaders/cs_composite_blit.comp
+--- a/src/shaders/cs_composite_blit.comp	2026-10-07 00:11:11.755586666 +0200
++++ b/src/shaders/cs_composite_blit.comp	2026-10-07 00:11:11.785358429 +0200
+@@ -42,6 +42,18 @@
+             l.x = L.x - 1.0f - l.x;
+         if (checkDebugFlag(compositedebug_QkxFlipY))
+             l.y = L.y - 1.0f - l.y;
++        // Virtual screen size (GAMESCOPE_QKX_SCALE): shrink the image around
++        // the eye centre so it fits the field of view; black outside it.
++        float z = 1.0f;
++        if (checkDebugFlag(compositedebug_QkxScale1))
++            z -= 0.15f;
++        if (checkDebugFlag(compositedebug_QkxScale2))
++            z -= 0.30f;
++        l = (l - L * 0.5f) / z + L * 0.5f;
++        if (any(lessThan(l, vec2(0.0f))) || any(greaterThanEqual(l, L))) {
++            imageStore(dst, ivec2(coord), vec4(0.0f, 0.0f, 0.0f, 1.0f));
++            return;
++        }
+         float s = min(P.x / L.x, P.y / L.y);
+         uv = l * s + (P - L * s) * 0.5f;
+     }
+diff -ruN a/src/shaders/descriptor_set.h b/src/shaders/descriptor_set.h
+--- a/src/shaders/descriptor_set.h	2026-10-07 00:11:11.756678843 +0200
++++ b/src/shaders/descriptor_set.h	2026-10-07 00:11:11.788265441 +0200
+@@ -38,6 +38,8 @@
+ const uint compositedebug_QkxStereo = 1u << 8; // Quest 2: same image to both eyes, rotated for the panel
+ const uint compositedebug_QkxFlipX = 1u << 9;
+ const uint compositedebug_QkxFlipY = 1u << 10;
++const uint compositedebug_QkxScale1 = 1u << 11; // virtual screen 85% (with Scale2: 55%)
++const uint compositedebug_QkxScale2 = 1u << 12; // virtual screen 70%
+ 
+ bool checkDebugFlag(uint flag) {
+     return (c_compositing_debug & flag) != 0;

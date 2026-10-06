@@ -3,17 +3,23 @@
 # Usage: qkx-gamescope <command> [args...]
 #
 # Turnip on KGSL renders; gamescope composites one logical per-eye screen
-# (1832x1920) and shows it to both eyes, rotated for the portrait panel
-# (GAMESCOPE_QKX_*), through one plane per layer mixer (SPLIT_PLANES).
+# (1832x1920, also the app's window size) and shows it to both eyes, rotated
+# for the portrait panel (GAMESCOPE_QKX_*), through one plane per layer mixer
+# (SPLIT_PLANES). GAMESCOPE_QKX_SCALE (percent: 100, 85, 70 or 55) sets how
+# much of the view the screen fills; -e is Steam mode (overlays, keyboard).
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/xdg}
 mkdir -p -m 700 "$XDG_RUNTIME_DIR"
 export VK_ICD_FILENAMES=/usr/local/share/vulkan/icd.d/freedreno_icd.aarch64.json
 export LIBSEAT_BACKEND=${LIBSEAT_BACKEND:-noop}
 export WLR_LIBINPUT_NO_DEVICES=1
 export GAMESCOPE_DRM_SPLIT_PLANES=1 GAMESCOPE_QKX_STEREO=1 GAMESCOPE_QKX_FLIPX=1
+# Local settings, e.g. GAMESCOPE_QKX_SCALE=55
+[ -f /etc/qkx/gamescope.conf ] && . /etc/qkx/gamescope.conf
+export GAMESCOPE_QKX_SCALE=${GAMESCOPE_QKX_SCALE:-70}
 # Xwayland's glamor/GLX: Zink on Turnip-KGSL from our Mesa in /usr/local (the
 # display device, msm_drm, has no GL driver of its own).
 export LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export MESA_LOADER_DRIVER_OVERRIDE=zink LIBGL_DRIVERS_PATH=/usr/local/lib/dri
 exec /usr/local/bin/gamescope --backend drm --prefer-output DSI-1 \
-	--force-orientation normal --force-composition -W 1920 -H 3664 -- "$@"
+	--force-orientation normal --force-composition -W 1920 -H 3664 \
+	-w 1832 -h 1920 ${QKX_GAMESCOPE_ARGS--e} -- "$@"

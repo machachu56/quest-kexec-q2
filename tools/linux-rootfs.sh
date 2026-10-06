@@ -78,7 +78,7 @@ for s in devfs dmesg mdev hwdrivers; do ln -sf /etc/init.d/$s $R/etc/runlevels/s
 for s in bootmisc hostname modules sysctl syslog; do ln -sf /etc/init.d/$s $R/etc/runlevels/boot/$s; done
 # Repo overlay (launchers, input receiver, services).
 cp -a /overlay/. $R/
-for s in networking sshd udhcpd local qkx-input qkx-controllers qkx-steam; do ln -sf /etc/init.d/$s $R/etc/runlevels/default/$s; done
+for s in networking sshd udhcpd local qkx-input qkx-controllers qkx-time qkx-steam; do ln -sf /etc/init.d/$s $R/etc/runlevels/default/$s; done
 
 # Features the 4.19 target understands (newer e2fsprogs defaults are not).
 rm -f /out/rootfs.img

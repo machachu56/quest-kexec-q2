@@ -71,9 +71,3 @@ index f2b8527..82144b6 100644
  
  bool checkDebugFlag(uint flag) {
      return (c_compositing_debug & flag) != 0;
-diff --git a/subprojects/libliftoff b/subprojects/libliftoff
---- a/subprojects/libliftoff
-+++ b/subprojects/libliftoff
-@@ -1 +1 @@
--Subproject commit 8b08dc1c14fd019cc90ddabe34ad16596b0691f4
-+Subproject commit 8b08dc1c14fd019cc90ddabe34ad16596b0691f4-dirty

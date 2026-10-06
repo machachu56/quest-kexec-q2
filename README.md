@@ -215,6 +215,7 @@ ssh -i out/linux/id_ed25519 root@10.42.0.2
 |---|---|
 | Steam session | `rc-service qkx-steam stop` / `start` / `restart` |
 | Boot to the Linux shell only, without Steam | `mkdir -p /etc/qkx && touch /etc/qkx/no-autosteam` |
+| Size of the screen in view (100, 85, 70 or 55 %) | `echo GAMESCOPE_QKX_SCALE=55 > /etc/qkx/gamescope.conf`, then restart the session |
 | Shell inside SteamOS | `qkx-steamos shell` |
 | Logs | `/var/log/qkx-steam.log`, `/var/log/qkx-controllers.log`, Steam's own in `/steamos/home/steam/.local/share/Steam/logs/` |
 | Back to Android | `reboot` |
