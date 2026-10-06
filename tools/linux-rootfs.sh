@@ -16,6 +16,7 @@ mkdir -p "$OUT"
 [ -f "$OUT/id_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C qkx-quest -f "$OUT/id_ed25519"
 
 podman run --rm --platform linux/arm64 -v "$OUT:/out:Z" -e SIZE="$SIZE" \
+	-v "$HERE/rootfs:/overlay:Z,ro" \
 	"docker.io/library/alpine:$ALPINE" sh -eu -c '
 apk add -q e2fsprogs
 R=/tmp/rootfs
@@ -23,7 +24,7 @@ mkdir -p $R/etc/apk
 cp /etc/apk/repositories $R/etc/apk/
 apk add -q --root $R --initdb --allow-untrusted --keys-dir /etc/apk/keys \
 	alpine-base openrc busybox-extras busybox-extras-openrc openssh \
-	e2fsprogs util-linux bash htop iproute2 kmod pciutils usbutils
+	e2fsprogs util-linux bash htop iproute2 kmod pciutils usbutils py3-evdev
 cp /etc/apk/keys/* $R/etc/apk/keys/
 
 echo quest2 > $R/etc/hostname
@@ -57,7 +58,9 @@ sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/" $R/etc/ssh/s
 
 for s in devfs dmesg mdev hwdrivers; do ln -sf /etc/init.d/$s $R/etc/runlevels/sysinit/$s; done
 for s in bootmisc hostname modules sysctl syslog; do ln -sf /etc/init.d/$s $R/etc/runlevels/boot/$s; done
-for s in networking sshd udhcpd local; do ln -sf /etc/init.d/$s $R/etc/runlevels/default/$s; done
+# Repo overlay (launchers, input receiver, services).
+cp -a /overlay/. $R/
+for s in networking sshd udhcpd local qkx-input; do ln -sf /etc/init.d/$s $R/etc/runlevels/default/$s; done
 
 # Features the 4.19 target understands (newer e2fsprogs defaults are not).
 rm -f /out/rootfs.img

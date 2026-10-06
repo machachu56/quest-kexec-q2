@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+# Receive input devices forwarded from the host (tools/qkx-input.py send).
+description="Quest kexec input forwarding receiver"
+command=/usr/bin/python3
+command_args="-u /usr/local/bin/qkx-input.py recv"
+command_background=true
+pidfile=/run/qkx-input.pid
+output_log=/var/log/qkx-input.log
+error_log=/var/log/qkx-input.log
+depend() { need net; }
