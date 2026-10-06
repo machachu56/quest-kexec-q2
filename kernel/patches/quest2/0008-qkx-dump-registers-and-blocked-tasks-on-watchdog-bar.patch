@@ -1,0 +1,43 @@
+From 94b08dc24bae784d74fb1e40216c3bfc184795b3 Mon Sep 17 00:00:00 2001
+From: Pol <pol@example.com>
+Date: Tue, 6 Oct 2026 22:14:49 +0200
+Subject: [PATCH] qkx: dump registers and blocked tasks on watchdog bark
+
+---
+ init/main.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/init/main.c b/init/main.c
+index 4ca3f9c7c..714a68b4d 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -50,6 +50,8 @@
+ #include <linux/interrupt.h>
+ #include <linux/of.h>
+ #include <linux/of_irq.h>
++#include <linux/sched/debug.h>
++#include <asm/irq_regs.h>
+ #include <linux/taskstats_kern.h>
+ #include <linux/delayacct.h>
+ #include <linux/unistd.h>
+@@ -1056,8 +1058,15 @@ static void qkx_pet_watchdog(void)
+  * after dumping every CPU's stack into the retained log. */
+ static irqreturn_t qkx_wdt_bark(int irq, void *unused)
+ {
+-	pr_emerg("QKX: apps watchdog bark (no pet for ~12 s); CPU backtraces follow\n");
+-	trigger_all_cpu_backtrace();
++	struct pt_regs *regs = get_irq_regs();
++
++	pr_emerg("QKX: apps watchdog bark (no pet for ~12 s) on cpu%d\n",
++		 smp_processor_id());
++	/* arm64 4.19 has no NMI backtrace: show the interrupted context and
++	 * every blocked task (sysrq-w) instead. */
++	if (regs)
++		show_regs(regs);
++	show_state_filter(TASK_UNINTERRUPTIBLE);
+ 	mdelay(500);
+ 	qkx_minimal_warm_reset();
+ 	return IRQ_HANDLED;
+-- 
+2.55.0
+
