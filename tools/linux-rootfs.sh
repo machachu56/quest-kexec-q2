@@ -6,17 +6,24 @@
 # Alpine (OpenRC) is used for bring-up: it runs on the 4.19 vendor kernel,
 # unlike current systemd distributions. Built in an arm64 podman container
 # (needs qemu-user-static). Output: <out-dir>/rootfs.img (ext4) and an SSH key.
+#
+# Includes the display stack: Alpine's gamescope/Xwayland packages for their
+# runtime dependencies, overridden by our patched builds in /usr/local
+# (tools/build-userspace.sh mesa|gamescope, built here if missing).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$(realpath -m "${1:-$HERE/out/linux}")
 SIZE=${2:-8}
 ALPINE=${ALPINE:-3.22}
 mkdir -p "$OUT"
+for c in mesa gamescope; do
+	[ -f "$HERE/out/build/$c.tar.gz" ] || "$HERE/tools/build-userspace.sh" "$c"
+done
 
 [ -f "$OUT/id_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -C qkx-quest -f "$OUT/id_ed25519"
 
 podman run --rm --platform linux/arm64 -v "$OUT:/out:Z" -e SIZE="$SIZE" \
-	-v "$HERE/rootfs:/overlay:Z,ro" \
+	-v "$HERE/rootfs:/overlay:Z,ro" -v "$HERE/out/build:/build:Z,ro" \
 	"docker.io/library/alpine:$ALPINE" sh -eu -c '
 apk add -q e2fsprogs
 R=/tmp/rootfs
@@ -24,7 +31,12 @@ mkdir -p $R/etc/apk
 cp /etc/apk/repositories $R/etc/apk/
 apk add -q --root $R --initdb --allow-untrusted --keys-dir /etc/apk/keys \
 	alpine-base openrc busybox-extras busybox-extras-openrc openssh \
-	e2fsprogs util-linux bash htop iproute2 kmod pciutils usbutils py3-evdev
+	e2fsprogs util-linux bash htop iproute2 kmod pciutils usbutils py3-evdev \
+	gamescope xwayland xkbcomp xkeyboard-config xcb-util-keysyms vulkan-loader \
+	mesa-utils vulkan-tools
+# Patched Mesa (Turnip on KGSL + Zink) and gamescope (Quest 2 output).
+tar -C $R -xzf /build/mesa.tar.gz
+tar -C $R -xzf /build/gamescope.tar.gz
 cp /etc/apk/keys/* $R/etc/apk/keys/
 
 echo quest2 > $R/etc/hostname
@@ -66,7 +78,7 @@ for s in devfs dmesg mdev hwdrivers; do ln -sf /etc/init.d/$s $R/etc/runlevels/s
 for s in bootmisc hostname modules sysctl syslog; do ln -sf /etc/init.d/$s $R/etc/runlevels/boot/$s; done
 # Repo overlay (launchers, input receiver, services).
 cp -a /overlay/. $R/
-for s in networking sshd udhcpd local qkx-input qkx-controllers; do ln -sf /etc/init.d/$s $R/etc/runlevels/default/$s; done
+for s in networking sshd udhcpd local qkx-input qkx-controllers qkx-steam; do ln -sf /etc/init.d/$s $R/etc/runlevels/default/$s; done
 
 # Features the 4.19 target understands (newer e2fsprogs defaults are not).
 rm -f /out/rootfs.img

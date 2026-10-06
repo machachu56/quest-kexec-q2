@@ -15,13 +15,19 @@ SIZE=${2:-24}
 BASE_URL=https://steamdeck-packages.steamos.cloud/archlinux-deckard/archlinux/main/system.rootfs.zst
 PKGS="deckard-steam-rel fex-wtf xorg-xwayland vulkan-icd-loader libglvnd mesa \
 	pipewire pipewire-pulse wireplumber python sudo which jq xorg-xhost strace \
-	gtk3 xcb-util-keysyms pciutils mesa-utils vulkan-tools lsof"
+	gtk3 xcb-util-keysyms pciutils mesa-utils vulkan-tools lsof \
+	at-spi2-core libcups libibus libva libvdpau libxinerama libxcomposite \
+	libxdamage libxkbcommon-x11 dconf adwaita-icon-theme cantarell-fonts"
 mkdir -p "$OUT"
 
 if ! podman image exists qkx-deckard-base; then
 	[ -f "$OUT/system.rootfs.zst" ] || curl -fL -o "$OUT/system.rootfs.zst" "$BASE_URL"
 	zstd -dc "$OUT/system.rootfs.zst" | podman import --arch arm64 - qkx-deckard-base
 fi
+
+# GTK 2 and our Mesa for the image (both built against the base above).
+[ -f "$OUT/gtk2.tar.gz" ] || "$HERE/tools/steamos/build-gtk2.sh"
+[ -f "$HERE/out/build/mesa-holo.tar.gz" ] || "$HERE/tools/build-userspace.sh" mesa-holo
 
 podman rm -f qkx-steamos-build >/dev/null 2>&1 || true
 podman run --platform linux/arm64 --name qkx-steamos-build \
@@ -48,9 +54,7 @@ echo packages: \$(pacman -Q | wc -l)
 podman cp "$HERE/tools/steamos/pacman.conf" qkx-steamos-build:/etc/pacman.conf
 
 # Pieces Valve's public repos lack: GTK 2 (steamui.so links it) and our Mesa
-# (Turnip on KGSL + Zink), both built by their own scripts.
-[ -f "$OUT/gtk2.tar.gz" ] || "$HERE/tools/steamos/build-gtk2.sh"
-[ -f "$HERE/out/build/mesa-holo.tar.gz" ] || "$HERE/tools/build-userspace.sh" mesa-holo
+# (Turnip on KGSL + Zink).
 for t in "$OUT/gtk2.tar.gz" "$HERE/out/build/mesa-holo.tar.gz"; do
 	podman cp "$t" qkx-steamos-build:/tmp/extra.tar.gz
 	podman start qkx-steamos-build >/dev/null

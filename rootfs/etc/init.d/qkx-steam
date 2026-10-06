@@ -1,0 +1,39 @@
+#!/sbin/openrc-run
+# Boot straight into SteamOS: the Steam client (gamepad UI) from the steamos
+# image, full screen in the headset (qkx-steamos steam, under gamescope).
+#
+# Skipped when the steamos image is not installed. To boot to the plain Linux
+# shell instead, create /etc/qkx/no-autosteam or pass qkx_nosteam on the
+# kernel command line (QKX_EXTRA_CMDLINE=qkx_nosteam tools/linux-install.sh).
+description="SteamOS session (Steam in the headset)"
+supervisor=supervise-daemon
+command=/usr/local/bin/qkx-steamos
+command_args="steam"
+respawn_delay=5
+respawn_max=5
+respawn_period=300
+output_log=/var/log/qkx-steam.log
+error_log=/var/log/qkx-steam.log
+
+depend() {
+	need localmount
+	after local qkx-controllers sshd networking
+}
+
+start_pre() {
+	if [ -e /etc/qkx/no-autosteam ] || grep -qw qkx_nosteam /proc/cmdline; then
+		eerror "SteamOS autostart disabled"
+		return 1
+	fi
+	for n in /sys/block/dm-*/dm/name; do
+		[ "$(cat "$n" 2>/dev/null)" = qkx-steamos ] && return 0
+	done
+	eerror "steamos image not installed (QKX_NAME=steamos tools/linux-install.sh)"
+	return 1
+}
+
+stop_post() {
+	# Steam runs in a chroot under gamescope; make sure nothing is left behind.
+	pkill -x gamescope-wl 2>/dev/null
+	return 0
+}

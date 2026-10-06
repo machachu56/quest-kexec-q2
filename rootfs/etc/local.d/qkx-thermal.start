@@ -1,0 +1,12 @@
+#!/bin/sh
+# No Android thermal-engine here: CPU thermal zones use the user_space policy,
+# so nothing throttles. Use schedutil and cap clocks until a thermal daemon exists.
+for p in /sys/devices/system/cpu/cpufreq/policy*; do
+	echo schedutil > $p/scaling_governor 2>/dev/null
+done
+echo 1804800 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
+echo 1900800 > /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq 2>/dev/null
+echo 2016000 > /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq 2>/dev/null
+# UFS clock scaling after kexec is suspected of hard-hanging the SoC under
+# bursty I/O; hold the storage clock at its maximum.
+echo performance > /sys/class/devfreq/1d84000.ufshc/governor

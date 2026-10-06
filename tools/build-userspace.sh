@@ -68,6 +68,17 @@ gamescope)
 *) echo "unknown component $NAME"; exit 1 ;;
 esac
 
+# Builder images are created on first use.
+if ! podman image exists "$BUILDER"; then
+	if [ "$BUILDER" = qkx-holo-builder ]; then
+		podman image exists qkx-deckard-base ||
+			{ echo "run tools/steamos-rootfs.sh first (imports Valve's base image)"; exit 1; }
+		podman build --platform linux/arm64 -t qkx-holo-builder -f "$HERE/tools/builder/Containerfile.holo" "$HERE/tools"
+	else
+		podman build --platform linux/arm64 -t qkx-builder "$HERE/tools/builder"
+	fi
+fi
+
 PDIR=$HERE/patches/${NAME%-holo}
 PSUM=$(cat "$PDIR"/*.patch 2>/dev/null | sha256sum | cut -c1-16)
 podman run --rm --platform linux/arm64 -e PSUM="$PSUM" \
