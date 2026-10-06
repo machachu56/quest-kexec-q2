@@ -34,6 +34,8 @@ podman run --platform linux/arm64 --name qkx-steamos-build \
 	-v "$HERE/tools/steamos/pacman.conf:/etc/pacman.conf:Z,ro" qkx-deckard-base sh -euc "
 pacman -Syu --noconfirm --needed $PKGS >/dev/null
 cp /etc/pacman.conf /etc/pacman.conf.qkx 2>/dev/null || true
+# D-Bus clients (Steam) need a machine id; systemd would create it at boot.
+systemd-machine-id-setup >/dev/null 2>&1 || true
 # No systemd-resolved/machined in the chroot: resolve hosts directly.
 sed -i "s/^hosts:.*/hosts: files dns/" /etc/nsswitch.conf
 id steam >/dev/null 2>&1 || useradd -m -u 1000 -G video,audio,input -s /bin/bash steam
