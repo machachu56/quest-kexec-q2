@@ -61,6 +61,9 @@ export STEAM_LAUNCH_WRAPPER_AUDIO_NAMESPACE=0
 # since RUNSTEAM.sh overrides LD_LIBRARY_PATH): Zink for GL, Turnip on KGSL.
 export MESA_LOADER_DRIVER_OVERRIDE=zink
 export VK_ICD_FILENAMES=/usr/local/share/vulkan/icd.d/freedreno_icd.aarch64.json
+# No udev in the chroot (Alpine runs mdev): SDL scans /dev/input itself, which
+# is how Steam finds the qkx-controllers gamepad.
+export SDL_JOYSTICK_DISABLE_UDEV=1
 [ -f /usr/share/deckard/mesavars.sh ] && set -a && . /usr/share/deckard/mesavars.sh && set +a
 cp -u /usr/share/deckard/RUNSTEAM.sh ~/.local/share/Steam/
 # The client's bundled FFmpeg is installed unversioned (libavcodec.so) but
