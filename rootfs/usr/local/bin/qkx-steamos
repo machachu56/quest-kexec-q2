@@ -1,0 +1,75 @@
+#!/bin/sh
+# Run the SteamOS (Steam Frame) userspace from the steamos image as a chroot,
+# full-screen in the headset through gamescope.
+#
+# Usage: qkx-steamos [steam|shell|<command>...]
+#   steam (default)  start the Steam client (gamepad UI) inside qkx-gamescope
+#   shell            interactive shell inside the chroot as root
+#
+# The 4.19 vendor kernel cannot run the image's systemd, so this replaces
+# steam.service: it does the same environment setup and runs RUNSTEAM.sh as
+# the steam user. gamescope (patched, from the Alpine side) owns the display.
+set -e
+R=/steamos
+
+dm_dev() {
+	for b in /sys/block/dm-*; do
+		[ "$(cat "$b/dm/name" 2>/dev/null)" = "$1" ] || continue
+		d=/dev/${b##*/}
+		[ -b "$d" ] || mknod "$d" b $(tr ':' ' ' < "$b/dev")
+		echo "$d"
+		return 0
+	done
+	return 1
+}
+
+if ! mountpoint -q "$R"; then
+	dev=$(dm_dev qkx-steamos) || { echo "qkx-steamos: steamos image not mapped (install it with QKX_NAME=steamos tools/linux-install.sh)"; exit 1; }
+	mkdir -p "$R"
+	mount -t ext4 -o rw,noatime "$dev" "$R"
+	for d in dev dev/pts proc sys run tmp; do
+		mkdir -p "$R/$d"
+	done
+	mount --rbind /dev "$R/dev"
+	mount -t proc proc "$R/proc"
+	mount --rbind /sys "$R/sys"
+	mount -t tmpfs -o mode=0755 tmpfs "$R/run"
+	# Shared with gamescope on the Alpine side: X11/Wayland sockets.
+	mount --bind /tmp "$R/tmp"
+	# The image's resolv.conf is a symlink into systemd-resolved, which does
+	# not run here: replace it with the host link's resolvers.
+	rm -f "$R/etc/resolv.conf"
+	cp /etc/resolv.conf "$R/etc/resolv.conf"
+fi
+
+case "${1:-steam}" in
+shell)
+	exec chroot "$R" /bin/bash -l
+	;;
+steam)
+	# Mirrors /usr/lib/systemd/user/steam.service of the Frame image.
+	cat > "$R/run/qkx-steam.sh" <<'EOF'
+#!/bin/bash
+export XDG_RUNTIME_DIR=/tmp/xdg-steam
+mkdir -p -m 700 "$XDG_RUNTIME_DIR/steam/env"
+cp -f /usr/share/deckard/steam_launch_wrapper_env_defaults.txt "$XDG_RUNTIME_DIR/steam/env/gfx.txt"
+export STEAM_LAUNCH_WRAPPER_AFFINITY_LIST=0xf8 STEAM_DESKTOP_APP_AFFINITY_LIST=0xf8
+export STEAM_CEF_USE_AUTOMATIC_PROXY=0 STEAM_DEBUGCEF_FAKEUI=1
+export STEAM_COMPAT_TOOL_MAPPINGS="546560 100 steamrt4-any"
+export STEAM_LAUNCH_WRAPPER_AUDIO_NAMESPACE=0
+[ -f /usr/share/deckard/mesavars.sh ] && set -a && . /usr/share/deckard/mesavars.sh && set +a
+cp -u /usr/share/deckard/RUNSTEAM.sh ~/.local/share/Steam/
+exec ~/.local/share/Steam/RUNSTEAM.sh
+EOF
+	chmod 755 "$R/run/qkx-steam.sh"
+	# DISPLAY is only known inside gamescope's child, so expand it there.
+	# shellcheck disable=SC2016
+	# Xwayland only admits the user that started it (root): let steam in once
+	# it is up (gamescope starts the child before Xwayland accepts clients).
+	exec qkx-gamescope chroot "$R" /bin/sh -c \
+		'for i in $(seq 50); do xhost +si:localuser:steam >/dev/null 2>&1 && break; sleep 0.2; done; exec /bin/su - steam -c "DISPLAY=$DISPLAY /run/qkx-steam.sh"'
+	;;
+*)
+	exec chroot "$R" "$@"
+	;;
+esac

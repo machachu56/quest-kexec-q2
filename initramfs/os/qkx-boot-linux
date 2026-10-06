@@ -28,11 +28,15 @@ if [ ! -e /dev/mapper/control ]; then
 fi
 
 mkdir -p /dev/qkx "$ROOT"
-if [ ! -e /dev/qkx/rootfs ]; then
-	set -- $(qkx_dm create qkx-rootfs "$USERDATA" "$CFG/maps/rootfs.map")
-	mknod /dev/qkx/rootfs b "$1" "$2"
-	log "rootfs: $(( $3 / 1024 / 1024 )) MiB via dm-linear on $USERDATA"
-fi
+# Map every installed image (rootfs, steamos, ...) as dm-linear "qkx-<name>";
+# only the rootfs is mounted here, the rest are found by name later.
+for map in "$CFG"/maps/*.map; do
+	name=${map##*/}; name=${name%.map}
+	[ -e "/dev/qkx/$name" ] && continue
+	set -- $(qkx_dm create "qkx-$name" "$USERDATA" "$map")
+	mknod "/dev/qkx/$name" b "$1" "$2"
+	log "$name: $(( $3 / 1024 / 1024 )) MiB via dm-linear on $USERDATA"
+done
 mount -t ext4 -o rw,noatime /dev/qkx/rootfs "$ROOT"
 [ -x "$ROOT/sbin/init" ] || { log 'rootfs has no /sbin/init'; umount "$ROOT"; exit 1; }
 log 'rootfs mounted'

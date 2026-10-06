@@ -37,7 +37,10 @@ auto usb0
 iface usb0 inet static
 	address 10.42.0.2
 	netmask 255.255.255.0
+	# The host shares its internet (NAT) over the USB link.
+	gateway 10.42.0.1
 EOF
+printf "nameserver 1.1.1.1\nnameserver 9.9.9.9\n" > $R/etc/resolv.conf
 cat > $R/etc/udhcpd.conf <<EOF
 interface usb0
 start 10.42.0.1
@@ -51,6 +54,9 @@ mkdir -p $R/var/lib && touch $R/var/lib/udhcpd.leases
 echo "/dev/root / ext4 rw,noatime 0 1" > $R/etc/fstab
 # No VT console on the headset: drop the getty lines.
 sed -i "/^tty[0-9]/d" $R/etc/inittab
+# Same uid as the SteamOS image'"'"'s steam user: Xwayland (here) resolves
+# xhost si:localuser:steam against this passwd.
+chroot $R adduser -D -u 1000 -s /bin/sh steam
 mkdir -p -m 700 $R/root/.ssh
 cp /out/id_ed25519.pub $R/root/.ssh/authorized_keys
 chmod 600 $R/root/.ssh/authorized_keys
