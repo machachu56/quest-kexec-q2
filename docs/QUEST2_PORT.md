@@ -341,3 +341,30 @@ that (planes 58 + 80). Test tool: `tools/tests/ion2kms` `[secs] [cached]
 - Result (user-confirmed): the Steam sign-in screen (phone-app QR) in the
   headset.
 - **Next:** controllers and head tracking (syncboss), SteamVR, FEX for x86.
+
+## Status 2026-10-07: Touch controllers and headset IMU via SyncBoss
+
+- SyncBoss (nRF52 MCU on `spi1.0`, Meta's in-tree driver) carries the headset
+  IMU and the Touch controller radio. Bring-up on Linux:
+  `transaction_length` = 512 (sysfs), keep `/dev/syncboss0` open, read
+  `/dev/syncboss_stream0`. `firmware_class` timeout 1 s (the proximity
+  calibration files are Android-only and otherwise stall open() ~4 min).
+- Commands were found by tracing Android's sensors HAL with a kprobe on
+  `queue_tx_packet` (`tools/syncboss/android-txtrace.sh`, `txdecode.py`) and
+  replaying subsets (`sbstart.py`): **110 [0]** enables headset IMU 0,
+  **133 [0]** starts the controller radio. 90/203/204 crash the MCU (sent by
+  the HAL on shutdown); 46 stalls the stream.
+- Headset IMU, packet type 80 (~1 kHz): u64 µs timestamp, accel xyz (f32, g),
+  gyro xyz (f32), temperature (f32).
+- Controllers, packet type 143: 8-byte id, descriptor (byte 10: 0 left,
+  1 right), link info, then records `[key, flags, data]` (lengths in
+  `qkx-controllers`): `0x24` buttons (bit0 A/X, bit1 B/Y, bit2 stick, bit3
+  Meta/Menu), `0x63` trigger (low 12 bits) and grip (high 12), inverted,
+  `0x82` stick int16 x/y, `0x41` motion (u32 ts + 6 x int16), `0x45`
+  capacitive touch (not mapped yet).
+- `rootfs/usr/local/bin/qkx-controllers` (OpenRC `qkx-controllers`): both
+  controllers as one uinput gamepad (Xbox layout, Meta = guide). Verified
+  every input on the headset.
+- **Next:** Steam picking up the pad; orientation from the IMUs (3DoF head
+  and controllers); then SteamVR/OpenXR. Positional (6DoF) tracking needs the
+  tracking cameras (SLAM / LED constellation) and is a research item.

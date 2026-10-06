@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+# Quest 2 Touch controllers (SyncBoss) as a uinput gamepad.
+description="Quest 2 Touch controllers"
+command=/usr/bin/python3
+command_args="-u /usr/local/bin/qkx-controllers"
+command_background=true
+pidfile=/run/qkx-controllers.pid
+output_log=/var/log/qkx-controllers.log
+error_log=/var/log/qkx-controllers.log

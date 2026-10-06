@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+# Quest 2 Touch controllers as a Linux gamepad (uinput), via the SyncBoss MCU.
+#
+# Sends the two start-up commands found in Android's sensors HAL traffic
+# (tools/syncboss/android-txtrace.sh): 110 = enable headset IMU 0 (type 80
+# packets), 133 = start the controller radio. Of the other start-up commands,
+# 90/203/204 crash the MCU and 46 stalls the stream. Controller packets
+# (type 143) become one "Xbox-style" pad that Steam understands.
+#
+# Controller packet (type 143): 8-byte controller id, 8-byte descriptor
+# (byte 10: 0 = left, 1 = right), 8 bytes of link info, then records
+# [key, flags, data...] with a fixed length per key:
+#   0x24 buttons   bit0 A/X, bit1 B/Y, bit2 stick click, bit3 Meta/menu
+#   0x63 analog    24 bits: trigger = low 12, grip = high 12, inverted (fff = released)
+#   0x82 stick     int16 x, int16 y (+-32767, y up positive)
+#   0x41 motion    u32 timestamp, 2 bytes, 6 x int16 accel/gyro
+import os, sys, time, json, select, fcntl, array, collections
+import evdev
+from evdev import ecodes as e
+
+SB = "/sys/devices/virtual/misc/syncboss0/spi/control"
+START = "/usr/local/share/qkx/syncboss-start.json"
+SEQ_ALLOC = 0x80010A02
+SEQ_RELEASE = 0x40010A03
+RECLEN = {0x07: 15, 0x08: 15, 0x20: 3, 0x22: 3, 0x24: 3, 0x41: 20, 0x45: 4,
+          0x62: 5, 0x63: 5, 0x81: 14, 0x82: 6, 0xc1: 8, 0xff: 2}
+
+AX = 32767
+caps = {
+    e.EV_KEY: [e.BTN_SOUTH, e.BTN_EAST, e.BTN_WEST, e.BTN_NORTH, e.BTN_TL, e.BTN_TR,
+               e.BTN_THUMBL, e.BTN_THUMBR, e.BTN_START, e.BTN_MODE],
+    e.EV_ABS: [(c, evdev.AbsInfo(0, -AX, AX, 128, 2048, 0))
+               for c in (e.ABS_X, e.ABS_Y, e.ABS_RX, e.ABS_RY)] +
+              [(c, evdev.AbsInfo(0, 0, 4095, 0, 64, 0)) for c in (e.ABS_Z, e.ABS_RZ)],
+}
+# left / right controller -> gamepad codes
+MAP = {
+    0: dict(b={0x01: e.BTN_WEST, 0x02: e.BTN_NORTH, 0x04: e.BTN_THUMBL, 0x08: e.BTN_START},
+            grip=e.BTN_TL, trig=e.ABS_Z, sx=e.ABS_X, sy=e.ABS_Y),
+    1: dict(b={0x01: e.BTN_SOUTH, 0x02: e.BTN_EAST, 0x04: e.BTN_THUMBR, 0x08: e.BTN_MODE},
+            grip=e.BTN_TR, trig=e.ABS_RZ, sx=e.ABS_RX, sy=e.ABS_RY),
+}
+GRIP_ON, GRIP_OFF = 2400, 1600  # hysteresis on the 0..4095 grip value
+
+
+def log(*a):
+    print("qkx-controllers:", *a, flush=True)
+
+
+def send(main, typ, data=b""):
+    a = array.array("B", [0])
+    fcntl.ioctl(main, SEQ_ALLOC, a, True)
+    os.write(main, bytes([typ, a[0], len(data)]) + data)
+    # Return the sequence number so the stream can be kept from overflowing.
+    fcntl.ioctl(main, SEQ_RELEASE, array.array("B", [a[0]]), False)
+
+
+def start(main, sfd):
+    t0 = time.time()
+    for at, typ, payload in json.load(open(START)):
+        while time.time() - t0 < at:
+            # Keep draining: the stream fifo overflows within a second.
+            if select.select([sfd], [], [], 0.002)[0]:
+                try:
+                    os.read(sfd, 65536)
+                except BlockingIOError:
+                    pass
+        send(main, typ, bytes.fromhex(payload))
+
+
+def main():
+    open(SB + "/transaction_length", "w").write("512")
+    try:
+        # Proximity calibration files are Android-only; do not stall on them.
+        open("/sys/class/firmware/timeout", "w").write("1")
+    except OSError:
+        pass
+    mfd = os.open("/dev/syncboss0", os.O_RDWR)
+    sfd = os.open("/dev/syncboss_stream0", os.O_RDONLY | os.O_NONBLOCK)
+    time.sleep(0.5)
+    start(mfd, sfd)
+    ui = evdev.UInput(caps, name="Quest 2 Touch Controllers", vendor=0x2833, product=0x0186)
+    # The SteamOS chroot's steam user is not in Alpine's input group.
+    os.chmod(ui.device.path, 0o666)
+    log("started,", ui.device.path)
+    state = {0: dict(btn=0, grip=False), 1: dict(btn=0, grip=False)}
+    seen = set()
+    npk, tlog = collections.Counter(), time.time()
+    while True:
+        now = time.time()
+        if now - tlog >= 5.0:
+            log("packets/5s", dict(npk))
+            npk.clear()
+            tlog = now
+        select.select([sfd], [], [], 0.5)
+        try:
+            buf = os.read(sfd, 65536)
+        except BlockingIOError:
+            continue
+        i, dirty = 0, False
+        while i + 3 < len(buf):
+            hl = buf[i + 1]
+            if hl < 2 or i + hl + 3 > len(buf):
+                break
+            typ, n = buf[i + hl], buf[i + hl + 2]
+            p = buf[i + hl + 3:i + hl + 3 + n]
+            i += hl + 3 + n
+            npk[typ] += 1
+            if typ != 143 or len(p) < 24:
+                continue
+            side = p[10]
+            if side not in MAP:
+                continue
+            if p[:8] not in seen:
+                seen.add(p[:8])
+                log("controller", p[:8].hex(), "left" if side == 0 else "right")
+            m, st = MAP[side], state[side]
+            r, j = p[24:], 0
+            while j < len(r) and r[j] in RECLEN:
+                k, ln = r[j], RECLEN[r[j]]
+                v = r[j + 1:j + ln]
+                j += ln
+                if len(v) < ln - 1:
+                    break
+                if k == 0x24:
+                    b = v[1]
+                    for bit, code in m["b"].items():
+                        if (b ^ st["btn"]) & bit:
+                            ui.write(e.EV_KEY, code, 1 if b & bit else 0)
+                    st["btn"] = b
+                    dirty = True
+                elif k == 0x63:
+                    raw = v[1] | v[2] << 8 | v[3] << 16
+                    trig, grip = 0xfff - (raw & 0xfff), 0xfff - (raw >> 12)
+                    ui.write(e.EV_ABS, m["trig"], trig)
+                    g = grip > (GRIP_OFF if st["grip"] else GRIP_ON)
+                    if g != st["grip"]:
+                        ui.write(e.EV_KEY, m["grip"], int(g))
+                        st["grip"] = g
+                    dirty = True
+                elif k == 0x82:
+                    x = int.from_bytes(v[1:3], "little", signed=True)
+                    y = int.from_bytes(v[3:5], "little", signed=True)
+                    ui.write(e.EV_ABS, m["sx"], x)
+                    ui.write(e.EV_ABS, m["sy"], max(-AX, min(AX, -y)))
+                    dirty = True
+        if dirty:
+            ui.syn()
+
+
+if __name__ == "__main__":
+    main()
