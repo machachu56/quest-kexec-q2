@@ -1,0 +1,17 @@
+diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
+index 4ac2ef7..afbd292 100644
+--- a/src/Backends/DRMBackend.cpp
++++ b/src/Backends/DRMBackend.cpp
+@@ -639,6 +639,12 @@ static bool get_plane_formats( struct drm_t *drm, gamescope::CDRMPlane *pPlane,
+ 	{
+ 		const uint32_t uFormat = pPlane->GetModePlane()->formats[ i ];
+ 		wlr_drm_format_set_add( pFormatSet, uFormat, DRM_FORMAT_MOD_INVALID );
++		// Without IN_FORMATS the plane takes implicit-modifier buffers, which
++		// is linear on drivers that never advertise any (e.g. Qualcomm's
++		// downstream msm_drm/SDE). Offer LINEAR so modifier-aware renderers
++		// such as Turnip on KGSL can allocate scanout buffers.
++		if ( !pPlane->GetProperties().IN_FORMATS )
++			wlr_drm_format_set_add( pFormatSet, uFormat, DRM_FORMAT_MOD_LINEAR );
+ 	}
+ 
+ 	if ( pPlane->GetProperties().IN_FORMATS )

@@ -1,0 +1,126 @@
+From 4dfad7f0cca734ecd0e16673eea909af70ee9817 Mon Sep 17 00:00:00 2001
+From: Pol <polvilagarcia@proton.me>
+Date: Tue, 6 Oct 2026 17:38:38 +0200
+Subject: [PATCH 7/7] qkx: Quest 2 retained log slot and watchdog bark warm
+ reset
+
+Move the retained log to 0x9ba40000 (ramoops dump zone 1 tail); the Quest
+Pro slot is in Quest 2's pmsg zone, which logd overwrites after boot.
+With qkx_keep_wdt the apps WDT stays enabled and is petted by a kthread
+after boot; its bark IRQ dumps all CPU stacks and does the DRAM-preserving
+warm reset, since a bite comes back cold on Quest 2.
+---
+ init/main.c | 66 +++++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 61 insertions(+), 5 deletions(-)
+
+diff --git a/init/main.c b/init/main.c
+index b382f79ee..4ca3f9c7c 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -48,6 +48,8 @@
+ #include <linux/tick.h>
+ #include <linux/sched/isolation.h>
+ #include <linux/interrupt.h>
++#include <linux/of.h>
++#include <linux/of_irq.h>
+ #include <linux/taskstats_kern.h>
+ #include <linux/delayacct.h>
+ #include <linux/unistd.h>
+@@ -553,7 +555,9 @@ static void __init mm_init(void)
+ 	pti_init();
+ }
+ 
+-#define QKX_LOG_PHYS 0x9ba80000ULL
++/* Quest 2: tail of ramoops dump zone 1. 0x9ba80000 (the Quest Pro slot) is in
++ * the pmsg zone here, which Android's logd overwrites right after boot. */
++#define QKX_LOG_PHYS 0x9ba40000ULL
+ #define QKX_LOG_SIZE 0x10000
+ #define QKX_LOG_MAGIC 0x514b584c
+ 
+@@ -1031,16 +1035,66 @@ static void __iomem *qkx_wdt;
+  * and pet it instead of disabling it, so a hang on every CPU, or a recovery
+  * reset stuck in SPMI, still ends in a DRAM-preserving bite. */
+ static bool qkx_keep_wdt;
++static bool qkx_bark_armed;
++extern void qkx_minimal_warm_reset(void) __noreturn;
+ core_param(qkx_keep_wdt, qkx_keep_wdt, bool, 0444);
+ 
+ static void qkx_pet_watchdog(void)
+ {
+ 	if (qkx_keep_wdt && qkx_wdt) {
+-		writel_relaxed(1, qkx_wdt + 0x04);
++		writel_relaxed(1, qkx_wdt + 0x04);	/* WDT_RST */
++		/* head.S cleared EN at entry; keep the counter running. Bark
++		 * and bite times are the ones Android programmed (12/15 s). */
++		/* WDT_EN; bit 1 unmasks the bark IRQ once its handler exists. */
++		writel_relaxed(qkx_bark_armed ? 3 : 1, qkx_wdt + 0x08);
+ 		mb();
+ 	}
+ }
+ 
++/* Bark fires ~3 s before the bite. A bite on Quest 2 comes back cold (RAM and
++ * the retained log lost), so turn the bark into a DRAM-preserving warm reset
++ * after dumping every CPU's stack into the retained log. */
++static irqreturn_t qkx_wdt_bark(int irq, void *unused)
++{
++	pr_emerg("QKX: apps watchdog bark (no pet for ~12 s); CPU backtraces follow\n");
++	trigger_all_cpu_backtrace();
++	mdelay(500);
++	qkx_minimal_warm_reset();
++	return IRQ_HANDLED;
++}
++
++static int __init qkx_wdt_bark_init(void)
++{
++	struct device_node *np;
++	int irq, ret;
++
++	if (!qkx_keep_wdt)
++		return 0;
++	np = of_find_compatible_node(NULL, NULL, "qcom,msm-watchdog");
++	irq = np ? irq_of_parse_and_map(np, 0) : 0;
++	of_node_put(np);
++	if (irq <= 0)
++		return 0;
++	ret = request_irq(irq, qkx_wdt_bark, IRQF_NO_SUSPEND | IRQF_NO_THREAD,
++			  "qkx-wdt-bark", NULL);
++	pr_info("QKX: watchdog bark irq %d request=%d\n", irq, ret);
++	if (!ret)
++		qkx_bark_armed = true;
++	return 0;
++}
++late_initcall(qkx_wdt_bark_init);
++
++/* After boot, keep petting so only a real all-CPU hang bites (warm reset,
++ * retained log kept). A sleeping kthread stops petting if scheduling dies. */
++static int qkx_wdt_petter(void *unused)
++{
++	while (!kthread_should_stop()) {
++		qkx_pet_watchdog();
++		msleep(2000);
++	}
++	return 0;
++}
++
+ static void __init qkx_force_watchdog_off(void)
+ {
+ 	if (!qkx_wdt)
+@@ -1246,10 +1300,12 @@ static ssize_t qkx_bootdone_write(struct file *f, const char __user *buf,
+ 		return -EINVAL;
+ 	if (c == 'd') {
+ 		atomic_set(&qkx_boot_done, 1);
+-		/* Healthy boot: stop the diagnostic WDT kept by qkx_keep_wdt. */
++		/* Healthy boot: hand the diagnostic WDT to a petting thread. */
+ 		if (qkx_keep_wdt && qkx_wdt) {
+-			writel_relaxed(0, qkx_wdt + 0x08);
+-			mb();
++			static struct task_struct *petter;
++
++			if (!petter)
++				petter = kthread_run(qkx_wdt_petter, NULL, "qkx-wdtpet");
+ 		}
+ 	}
+ 	else if (c == 'p')
+-- 
+2.55.0
+

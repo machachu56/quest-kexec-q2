@@ -14,7 +14,9 @@ case "$W" in /data/local/tmp/qkx*) ;; *) echo 'invalid pinned-file work director
 BIN=$W/bin
 IMG=$W/img
 MAP=$W/maps
-DEV=/dev/block/sda7          # userdata; verified 1:1 under dm-default-key
+# userdata (sda7 on Quest Pro, sda9 on Quest 2); verified 1:1 under dm-default-key
+DEV=$(readlink -f /dev/block/by-name/userdata)
+[ -b "$DEV" ] || { echo 'qkx-install: cannot resolve userdata'; exit 1; }
 
 usage() {
 	echo "usage: qkx-install.sh alloc  <name> <bytes>"

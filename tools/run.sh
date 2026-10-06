@@ -8,8 +8,14 @@ P=$1; shift
 T=/data/local/tmp
 MOD=${QKX_LOADER_MODULE:-$HERE/module/quest_kexec.ko}
 MARKER=${QKX_MARKER_MODULE:-$HERE/module/marker_read.ko}
+# Board profile: both are kona; only board-level device names differ.
+case "$(adb shell getprop ro.product.device | tr -d '\r')" in
+	seacliff) LOG_PHYS=0x9ba80000; BOARD_PARAMS="syncboss_dev=spi0.0" ;;
+	hollywood) LOG_PHYS=0x9ba40000; BOARD_PARAMS="syncboss_dev=spi1.0 keep_ufs=1" ;;
+	*) echo "unsupported device: $(adb shell getprop ro.product.device)"; exit 1 ;;
+esac
 PARAMS="execute=1 preserve_watchdog=1 watchdog_recovery=0 core_hang_control=2 \
-flush_rpmh=1 suspend_syncboss=1 disconnect_qmp=0 phase_delay_ms=300 $*"
+flush_rpmh=1 suspend_syncboss=1 disconnect_qmp=0 phase_delay_ms=300 log_phys=$LOG_PHYS $BOARD_PARAMS $*"
 
 for f in "$MOD" "$MARKER" "$P/Image" "$P/initramfs" "$P/boot.dtb"; do
 	[ -f "$f" ] || { echo "missing $f"; exit 1; }
@@ -81,6 +87,19 @@ EOF
 	echo "reserved $(wc -l < "$P/ionsec.txt") secure ranges as $(($(echo $REG | wc -w) / 4)) blocks"
 fi
 
+# Never reuse RAM this Android boot gave to dynamically placed (possibly
+# hypervisor-owned) reserved regions; placement can differ between boots.
+adb shell "su -c 'dmesg'" | grep -E 'Reserved memory: created|reserved mem: initialized node' \
+	> "$P/android-reserved.txt"
+if [ -s "$P/android-reserved.txt" ]; then
+	if [ "$DTB" = "$P/boot.dtb" ]; then
+		DTB=$(mktemp --suffix=.dtb)
+		cp "$P/boot.dtb" "$DTB"
+	fi
+	python3 "$HERE/tools/fence-reserved.py" "$DTB" "$P/android-reserved.txt" | tail -1 ||
+		{ echo "failed to fence Android reserved regions"; exit 1; }
+fi
+
 # The appended calibration archive changes the initrd length. Keep /chosen
 # consistent with the verified bytes staged by the loader.
 if [ -n "$PRIVATE_INITRD" ]; then
@@ -133,7 +152,7 @@ if [ "${QKX_STOP_QSEE:-0}" = 1 ]; then
 fi
 
 # Invalidate the previous retained log so a reset can't reuse it.
-adb shell "su -c 'insmod $T/qkx_marker.ko clear=1; rmmod marker_read'" >/dev/null 2>&1
+adb shell "su -c 'insmod $T/qkx_marker.ko clear=1 log_phys=$LOG_PHYS; rmmod marker_read'" >/dev/null 2>&1
 # Assignments made after the ion_secmap snapshot would be missing from the
 # reservation; hypwatch (if loaded) shows whether that window saw any.
 adb shell "su -c 'cat /proc/qkx_hypwatch 2>/dev/null'" > "$P/hypwatch.txt" &&

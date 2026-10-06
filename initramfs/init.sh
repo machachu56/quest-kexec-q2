@@ -24,6 +24,19 @@ log() { echo "qkx-init: $*"; }
 bootdone() { [ -w /proc/qkx_bootdone ] && echo "$1" > /proc/qkx_bootdone; }
 
 log "reached $(uname -r)"
+# After kexec a core in deep idle (power collapse) can fail to wake, and the
+# next cross-CPU IPI then soft-locks the system (seen on Quest 2 CPU7 during
+# BPF JIT). Keep only the shallowest idle state (WFI) until that is fixed.
+for st in /sys/devices/system/cpu/cpu*/cpuidle/state*; do
+	[ "${st##*state}" = 0 ] || echo 1 > "$st/disable" 2>/dev/null
+done
+log "deep cpuidle states disabled"
+# Status LED (Quest 2 has red/green/blue): visible progress without USB.
+led() { for c in red green blue; do
+	v=0; [ "$c" = "$1" ] && v=255
+	echo $v > /sys/class/leds/$c/brightness 2>/dev/null
+done; }
+led blue
 
 g=/config/usb_gadget/qkx
 mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409" "$g/functions/ecm.usb0"
@@ -51,12 +64,37 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 if [ -z "$udc" ]; then
 	log "no UDC; forcing warm reset so the log survives"
+	led red
 	bootdone r
 	while :; do sleep 60; done
 fi
 log "bound ${udc##*/}"
 # Keep the DWC3 glue device out of runtime suspend.
 echo on > "$udc/device/../power/control" 2>/dev/null
+# The kexec target skips SMB5's initial status, so dwc3-msm may never see
+# VBUS and start a peripheral session (seen on Quest 2). Force device mode.
+mode=$udc/device/../mode
+usbstate() {
+	for e in /sys/class/extcon/*; do log "extcon $(cat $e/name) $(cat $e/state | tr '\n' ' ')"; done
+	log "usb psy present=$(cat /sys/class/power_supply/usb/present) online=$(cat /sys/class/power_supply/usb/online) typec=$(cat /sys/class/power_supply/usb/typec_mode)"
+	for r in /sys/class/regulator/*; do case "$(cat $r/name)" in *usb*|hsphy*) log "reg $(cat $r/name) $(cat $r/state)";; esac; done
+	log "dwc3 mode=$(cat "$mode") udc=$(cat "$udc/state")"
+}
+usbstate
+led green
+# No host enumeration within 30 s: keep the log with a warm reset.
+(for _ in $(seq 30); do
+	[ "$(cat "$udc/state" 2>/dev/null)" = configured ] && { log "host configured gadget"; exit; }
+	sleep 1
+done
+log "gadget not configured by host (state $(cat "$udc/state")); warm reset"
+# The 64K retained log only holds late boot; replay the USB bring-up
+# (including dev_dbg lines) from the full printk buffer before resetting.
+dmesg | grep -iE "dwc3|hsphy|eud|extcon|pdphy|usbpd|smb5|ssphy|qmp|udc|gadget" |
+	grep -v "post-bind dump" | tail -120 |
+	while IFS= read -r l; do echo "qkx-replay: $l" > /dev/kmsg; done
+led red; sleep 1; bootdone r) &
+usbwatch=$!
 
 ifconfig lo 127.0.0.1 up
 ifconfig usb0 10.42.0.2 netmask 255.255.255.0 up
@@ -81,7 +119,20 @@ bootdone d
 # BusyBox dmesg cannot follow the log by itself.
 qkx-klogwatch -f /tmp/kernel.log >/dev/null 2>&1 &
 
-if [ -d /etc/qkx/maps ]; then
+if [ -s /etc/qkx/maps/rootfs.map ]; then
+	# Plain Linux: mount the pinned rootfs and hand PID 1 to its init. Any
+	# failure leaves this shell running for debugging.
+	if qkx-boot-linux; then
+		log 'switching to Linux rootfs'
+		# The USB watchdog subshell would lose its tools with the initramfs
+		# and misread the gadget as unconfigured; the host has it by now.
+		kill $usbwatch $(cat /tmp/telnet.pid) 2>/dev/null
+		killall telnetd udhcpd qkx-klogwatch 2>/dev/null
+		umount /config /dev/pts /tmp 2>/dev/null
+		exec switch_root /newroot /sbin/init
+	fi
+	log 'Linux rootfs failed; staying in the initramfs shell'
+elif [ -d /etc/qkx/maps ]; then
 	log 'assembling custom OS'
 	# Keep the transcript: the shell only arrives after this has run. Avoid a
 	# pipeline so the exit status is qkx-mount-os's own.

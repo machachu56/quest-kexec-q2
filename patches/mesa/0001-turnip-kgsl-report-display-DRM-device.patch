@@ -1,0 +1,58 @@
+diff -ruN mesa-a/src/freedreno/vulkan/tu_device.cc mesa-25.1.9/src/freedreno/vulkan/tu_device.cc
+--- mesa-a/src/freedreno/vulkan/tu_device.cc	2026-10-06 17:40:51.038776940 +0200
++++ mesa-25.1.9/src/freedreno/vulkan/tu_device.cc	2026-10-06 17:40:51.478407228 +0200
+@@ -298,7 +298,8 @@
+       .EXT_mutable_descriptor_type = true,
+       .EXT_nested_command_buffer = true,
+       .EXT_non_seamless_cube_map = true,
+-      .EXT_physical_device_drm = !is_kgsl(device->instance),
++      .EXT_physical_device_drm = !is_kgsl(device->instance) ||
++                                 device->has_master || device->has_local,
+       .EXT_pipeline_creation_cache_control = true,
+       .EXT_pipeline_creation_feedback = true,
+       .EXT_post_depth_coverage = true,
+diff -ruN mesa-a/src/freedreno/vulkan/tu_knl_kgsl.cc mesa-25.1.9/src/freedreno/vulkan/tu_knl_kgsl.cc
+--- mesa-a/src/freedreno/vulkan/tu_knl_kgsl.cc	2026-10-06 17:40:51.039776958 +0200
++++ mesa-25.1.9/src/freedreno/vulkan/tu_knl_kgsl.cc	2026-10-06 17:40:51.477663941 +0200
+@@ -11,6 +11,8 @@
+ #include <stdint.h>
+ #include <sys/ioctl.h>
+ #include <sys/mman.h>
++#include <sys/stat.h>
++#include <sys/sysmacros.h>
+ #include <linux/dma-heap.h>
+ 
+ #define __user
+@@ -1498,6 +1500,32 @@
+    device->local_fd = fd;
+    device->kgsl_dma_fd = dma_fd;
+ 
++   /* KGSL is not a DRM driver, but on Qualcomm downstream kernels the
++    * display (msm_drm/SDE) shares dma-bufs with it. Report that DRM device
++    * through VK_EXT_physical_device_drm so compositors such as gamescope can
++    * pair this GPU with the KMS device. Overridable for multi-card systems.
++    */
++   {
++      const char *primary = getenv("TU_KGSL_DRM_PRIMARY");
++      const char *render = getenv("TU_KGSL_DRM_RENDER");
++      struct stat st;
++
++      if (!primary)
++         primary = "/dev/dri/card0";
++      if (!render)
++         render = "/dev/dri/renderD128";
++      if (stat(primary, &st) == 0 && S_ISCHR(st.st_mode)) {
++         device->has_master = true;
++         device->master_major = major(st.st_rdev);
++         device->master_minor = minor(st.st_rdev);
++      }
++      if (stat(render, &st) == 0 && S_ISCHR(st.st_mode)) {
++         device->has_local = true;
++         device->local_major = major(st.st_rdev);
++         device->local_minor = minor(st.st_rdev);
++      }
++   }
++
+    device->dev_id.gpu_id =
+       ((info.chip_id >> 24) & 0xff) * 100 +
+       ((info.chip_id >> 16) & 0xff) * 10 +

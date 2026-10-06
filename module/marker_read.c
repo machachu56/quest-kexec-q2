@@ -6,7 +6,11 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
-#define QKX_LOG_PHYS 0x9ba80000ULL
+/* Quest Pro: 0x9ba80000. Quest 2: 0x9ba40000 (0x9ba80000 is inside Android's
+ * pmsg zone there and logd overwrites it within seconds of boot). */
+static unsigned long log_phys = 0x9ba80000UL;
+module_param(log_phys, ulong, 0);
+#define QKX_LOG_PHYS ((u64)log_phys)
 #define QKX_LOG_SIZE 0x10000
 #define QKX_LOG_MAGIC 0x514b584c
 #define QKX_LOG_PAGES (QKX_LOG_SIZE / PAGE_SIZE)

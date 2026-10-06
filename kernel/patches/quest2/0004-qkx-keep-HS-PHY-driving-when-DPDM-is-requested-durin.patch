@@ -1,0 +1,42 @@
+From 19888e359bb105ff92adda99660d9e6a8b446554 Mon Sep 17 00:00:00 2001
+From: Pol <polvilagarcia@proton.me>
+Date: Tue, 6 Oct 2026 13:42:05 +0200
+Subject: [PATCH 4/5] qkx: keep HS PHY driving when DPDM is requested during an
+ active session
+
+After kexec dwc3-msm starts peripheral mode before SMB5 sees VBUS (Quest 2).
+SMB5's DPDM request then reset the PHY into UTMI non-driving mode and gated
+its clocks under the live session, so the host never saw the D+ pull-up.
+---
+ drivers/usb/phy/phy-msm-snps-hs.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/drivers/usb/phy/phy-msm-snps-hs.c b/drivers/usb/phy/phy-msm-snps-hs.c
+index 8e4ae16ab..6b4e8c2a1 100644
+--- a/drivers/usb/phy/phy-msm-snps-hs.c
++++ b/drivers/usb/phy/phy-msm-snps-hs.c
+@@ -598,6 +598,21 @@ static int msm_hsphy_dpdm_regulator_enable(struct regulator_dev *rdev)
+ 	dev_dbg(phy->phy.dev, "%s dpdm_enable:%d\n",
+ 				__func__, phy->dpdm_enable);
+ 
++	/*
++	 * qkx: after kexec dwc3-msm starts peripheral mode before SMB5 sees
++	 * VBUS (seen on Quest 2). Charger detection must not then reset the
++	 * PHY into UTMI non-driving mode or gate its clocks under the live
++	 * session; the host would never see the D+ pull-up. Record the vote.
++	 */
++	mutex_lock(&phy->phy_lock);
++	if (phy->cable_connected) {
++		dev_info(phy->phy.dev, "qkx: dpdm enable during active session; PHY left driving\n");
++		phy->dpdm_enable = true;
++		mutex_unlock(&phy->phy_lock);
++		return 0;
++	}
++	mutex_unlock(&phy->phy_lock);
++
+ 	msm_hsphy_enable_clocks(phy, true);
+ 	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg)) {
+ 		dev_err(phy->phy.dev, "eud is enabled\n");
+-- 
+2.55.0
+

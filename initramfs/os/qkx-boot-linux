@@ -1,0 +1,38 @@
+#!/bin/busybox sh
+# Assemble a plain Linux root from the pinned rootfs image on userdata and
+# mount it at /newroot. PID 1 (init.sh) then switch_roots into its /sbin/init.
+set -e
+CFG=/etc/qkx
+ROOT=/newroot
+
+log() { echo "qkx-linux: $*"; }
+
+byname() {
+	awk -v n="$1" '$1 == n { print $2; found = 1 } END { exit !found }' \
+		"$CFG/partitions"
+}
+
+USERDATA=$(byname userdata) || { log 'no userdata in partition map'; exit 1; }
+base=${USERDATA##*/}
+USERDATA=/dev/block/$base
+if [ ! -b "$USERDATA" ]; then
+	mm=$(cat "/sys/class/block/$base/dev") || { log "no $base (UFS not up?)"; exit 1; }
+	mkdir -p /dev/block
+	mknod "$USERDATA" b "${mm%:*}" "${mm#*:}"
+fi
+
+if [ ! -e /dev/mapper/control ]; then
+	mkdir -p /dev/mapper
+	mknod /dev/mapper/control c 10 \
+		"$(awk '$2 == "device-mapper" { print $1 }' /proc/misc)"
+fi
+
+mkdir -p /dev/qkx "$ROOT"
+if [ ! -e /dev/qkx/rootfs ]; then
+	set -- $(qkx_dm create qkx-rootfs "$USERDATA" "$CFG/maps/rootfs.map")
+	mknod /dev/qkx/rootfs b "$1" "$2"
+	log "rootfs: $(( $3 / 1024 / 1024 )) MiB via dm-linear on $USERDATA"
+fi
+mount -t ext4 -o rw,noatime /dev/qkx/rootfs "$ROOT"
+[ -x "$ROOT/sbin/init" ] || { log 'rootfs has no /sbin/init'; umount "$ROOT"; exit 1; }
+log 'rootfs mounted'

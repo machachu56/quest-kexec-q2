@@ -1,0 +1,99 @@
+From c7c83cdceb0744baa368598f22cf733cd288fb5e Mon Sep 17 00:00:00 2001
+From: Pol <polvilagarcia@proton.me>
+Date: Tue, 6 Oct 2026 13:42:06 +0200
+Subject: [PATCH 5/5] qkx: qkx_keep_wdt diagnostic and quieter msm_bus commit
+ logging
+
+qkx_keep_wdt=1 pets the apps WDT left armed by the loader instead of
+disabling it, so hangs on every CPU still end in a DRAM-preserving bite.
+The per-commit qkxbus messages flooded the 64K retained log.
+---
+ .../soc/qcom/msm_bus/msm_bus_fabric_rpmh.c    |  6 ++---
+ init/main.c                                   | 27 ++++++++++++++++++-
+ 2 files changed, 29 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c b/drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c
+index 658464c5f..ea442dfc9 100644
+--- a/drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c
++++ b/drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c
+@@ -668,9 +668,9 @@ int msm_bus_commit_data(struct list_head *clist)
+ 	tcs_cmd_n_shrink(n_wake);
+ 	tcs_cmd_n_shrink(n_sleep);
+ 
+-	pr_emerg("qkxbus: commit rsc invalidate\n");
++	pr_debug("qkxbus: commit rsc invalidate\n");
+ 	ret = rpmh_invalidate(cur_mbox);
+-	pr_emerg("qkxbus: commit invalidate ret=%d\n", ret);
++	pr_debug("qkxbus: commit invalidate ret=%d\n", ret);
+ 	if (ret)
+ 		MSM_BUS_ERR("%s: Error invalidating mbox: %d\n",
+ 						__func__, ret);
+@@ -709,7 +709,7 @@ int msm_bus_commit_data(struct list_head *clist)
+ 							__func__, ret);
+ 	}
+ 
+-	pr_emerg("qkxbus: commit rsc=%d writes done ret=%d n=%d\n",
++	pr_debug("qkxbus: commit rsc=%d writes done ret=%d n=%d\n",
+ 		 cur_rsc->node_info->id, ret, n_active[0]);
+ 	list_for_each_entry_safe(node, node_tmp, clist, link) {
+ 		if (unlikely(node->node_info->defer_qos))
+diff --git a/init/main.c b/init/main.c
+index db071cfa5..b382f79ee 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -1027,10 +1027,28 @@ static char *initcall_level_names[] __initdata = {
+ 
+ static void __iomem *qkx_wdt;
+ 
++/* Diagnostic: keep the apps WDT the loader left armed (watchdog_recovery=1)
++ * and pet it instead of disabling it, so a hang on every CPU, or a recovery
++ * reset stuck in SPMI, still ends in a DRAM-preserving bite. */
++static bool qkx_keep_wdt;
++core_param(qkx_keep_wdt, qkx_keep_wdt, bool, 0444);
++
++static void qkx_pet_watchdog(void)
++{
++	if (qkx_keep_wdt && qkx_wdt) {
++		writel_relaxed(1, qkx_wdt + 0x04);
++		mb();
++	}
++}
++
+ static void __init qkx_force_watchdog_off(void)
+ {
+ 	if (!qkx_wdt)
+ 		qkx_wdt = ioremap(0x17c10000, 0x1000);
++	if (qkx_keep_wdt) {
++		qkx_pet_watchdog();
++		return;
++	}
+ 	if (qkx_wdt) {
+ 		writel_relaxed(0, qkx_wdt + 0x08);
+ 		mb();
+@@ -1179,6 +1197,7 @@ static int qkx_boot_watchdog(void *unused)
+ 			qkx_minimal_warm_reset();
+ 		}
+ 
++		qkx_pet_watchdog();
+ 		mdelay(20);
+ 		/* The watchdog intentionally never sleeps, but a permanent busy
+ 		 * loop otherwise prevents this CPU from reporting an RCU
+@@ -1225,8 +1244,14 @@ static ssize_t qkx_bootdone_write(struct file *f, const char __user *buf,
+ 
+ 	if (n < 1 || copy_from_user(&c, buf, 1))
+ 		return -EINVAL;
+-	if (c == 'd')
++	if (c == 'd') {
+ 		atomic_set(&qkx_boot_done, 1);
++		/* Healthy boot: stop the diagnostic WDT kept by qkx_keep_wdt. */
++		if (qkx_keep_wdt && qkx_wdt) {
++			writel_relaxed(0, qkx_wdt + 0x08);
++			mb();
++		}
++	}
+ 	else if (c == 'p')
+ 		qkx_deferred_probe_kick();
+ 	else if (c == 'r') {
+-- 
+2.55.0
+

@@ -1,0 +1,14 @@
+# arm64 Alpine build environment for userspace components installed into the
+# headset rootfs (same Alpine release, so library ABIs match). Build once:
+#   podman build --platform linux/arm64 -t qkx-builder tools/builder
+FROM docker.io/library/alpine:3.22
+RUN apk add --no-cache build-base meson ninja cmake git patch python3 py3-mako \
+	py3-yaml py3-packaging bison flex glslang glslang-dev libdrm-dev zlib-dev \
+	expat-dev elfutils-dev zstd-dev linux-headers vulkan-loader-dev \
+	benchmark-dev glm-dev hwdata-dev libavif-dev libcap-dev libdecor-dev \
+	libdisplay-info-dev libei-dev libinput-dev libseat-dev libx11-dev \
+	libxcomposite-dev libxcursor-dev libxdamage-dev libxkbcommon-dev libxmu-dev \
+	libxrender-dev libxres-dev libxtst-dev libxxf86vm-dev luajit-dev pipewire-dev \
+	pixman-dev sdl2-dev spirv-headers stb wayland-protocols wayland-dev \
+	xcb-util-errors-dev xcb-util-wm-dev xwayland-dev ccache \
+	libxshmfence-dev libxrandr-dev libxcb-dev xcb-util-keysyms-dev libxext-dev libxxf86vm-dev

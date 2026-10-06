@@ -26,3 +26,4 @@ __pycache__/
 *~
 .vscode/
 .idea/
+/tools/tests/ion2kms/ion2kms

@@ -1,0 +1,243 @@
+--- a/src/Backends/DRMBackend.cpp
++++ b/src/Backends/DRMBackend.cpp
+@@ -118,6 +118,8 @@
+ 	struct liftoff_device *lo_device;
+ 	struct liftoff_output *lo_output;
+ 	struct liftoff_layer *lo_layers[ k_nMaxLayers ];
++	// Right halves when GAMESCOPE_DRM_SPLIT_PLANES is set (see qkx_lset).
++	struct liftoff_layer *lo_layers_split[ k_nMaxLayers ];
+ 
+ 	std::shared_ptr<gamescope::BackendBlob> sdr_static_metadata;
+ 
+@@ -2461,6 +2463,30 @@
+ 	}
+ }
+ 
++// Qualcomm SDE with a dual layer-mixer topology (two DSC encoders, two DSI
++// links, e.g. Quest 2) scans out garbage from a single plane spanning both
++// mixers, but works with one plane per mixer. With GAMESCOPE_DRM_SPLIT_PLANES=1
++// every layer is presented as a left and a right half on separate planes.
++static bool qkx_split_planes()
++{
++	static const bool s_bSplit = env_to_bool( getenv( "GAMESCOPE_DRM_SPLIT_PLANES" ) );
++	return s_bSplit;
++}
++
++static void qkx_lset( struct drm_t *drm, int i, const char *pszName, uint64_t ulValue )
++{
++	liftoff_layer_set_property( drm->lo_layers[ i ], pszName, ulValue );
++	if ( drm->lo_layers_split[ i ] )
++		liftoff_layer_set_property( drm->lo_layers_split[ i ], pszName, ulValue );
++}
++
++static void qkx_lunset( struct drm_t *drm, int i, const char *pszName )
++{
++	liftoff_layer_unset_property( drm->lo_layers[ i ], pszName );
++	if ( drm->lo_layers_split[ i ] )
++		liftoff_layer_unset_property( drm->lo_layers_split[ i ], pszName );
++}
++
+ static int
+ drm_prepare_liftoff( struct drm_t *drm, const struct FrameInfo_t *frameInfo, bool needs_modeset )
+ {
+@@ -2496,17 +2522,17 @@
+ 			const int nFence = cv_drm_debug_disable_in_fence_fd ? -1 : g_nAlwaysSignalledSyncFile;
+ 
+ 
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "FB_ID", pDrmFb->GetFbId());
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "IN_FENCE_FD", nFence );
++			qkx_lset( drm, i, "FB_ID", pDrmFb->GetFbId());
++			qkx_lset( drm, i, "IN_FENCE_FD", nFence );
+ 			drm->m_FbIdsInRequest.emplace_back( pDrmFb );
+ 
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "zpos", entry.layerState[i].zpos );
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "alpha", frameInfo->layers[ i ].opacity * 0xffff);
++			qkx_lset( drm, i, "zpos", entry.layerState[i].zpos );
++			qkx_lset( drm, i, "alpha", frameInfo->layers[ i ].opacity * 0xffff);
+ 
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "SRC_X", 0);
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "SRC_Y", 0);
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "SRC_W", entry.layerState[i].srcW );
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "SRC_H", entry.layerState[i].srcH );
++			qkx_lset( drm, i, "SRC_X", 0);
++			qkx_lset( drm, i, "SRC_Y", 0);
++			qkx_lset( drm, i, "SRC_W", entry.layerState[i].srcW );
++			qkx_lset( drm, i, "SRC_H", entry.layerState[i].srcH );
+ 
+ 			uint64_t ulOrientation = DRM_MODE_ROTATE_0;
+ 			switch ( drm->pConnector->GetCurrentOrientation() )
+@@ -2525,13 +2551,25 @@
+ 				ulOrientation = DRM_MODE_ROTATE_180;
+ 				break;
+ 			}
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "rotation", ulOrientation );
++			qkx_lset( drm, i, "rotation", ulOrientation );
++
++			qkx_lset( drm, i, "CRTC_X", entry.layerState[i].crtcX);
++			qkx_lset( drm, i, "CRTC_Y", entry.layerState[i].crtcY);
+ 
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "CRTC_X", entry.layerState[i].crtcX);
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "CRTC_Y", entry.layerState[i].crtcY);
++			qkx_lset( drm, i, "CRTC_W", entry.layerState[i].crtcW);
++			qkx_lset( drm, i, "CRTC_H", entry.layerState[i].crtcH);
+ 
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "CRTC_W", entry.layerState[i].crtcW);
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "CRTC_H", entry.layerState[i].crtcH);
++			if ( drm->lo_layers_split[ i ] )
++			{
++				const uint64_t ulSrcHalf = ( entry.layerState[i].srcW >> 17 ) << 16;
++				const uint32_t uCrtcHalf = entry.layerState[i].crtcW / 2;
++				liftoff_layer_set_property( drm->lo_layers[ i ], "SRC_W", ulSrcHalf );
++				liftoff_layer_set_property( drm->lo_layers[ i ], "CRTC_W", uCrtcHalf );
++				liftoff_layer_set_property( drm->lo_layers_split[ i ], "SRC_X", ulSrcHalf );
++				liftoff_layer_set_property( drm->lo_layers_split[ i ], "SRC_W", entry.layerState[i].srcW - ulSrcHalf );
++				liftoff_layer_set_property( drm->lo_layers_split[ i ], "CRTC_X", entry.layerState[i].crtcX + uCrtcHalf );
++				liftoff_layer_set_property( drm->lo_layers_split[ i ], "CRTC_W", entry.layerState[i].crtcW - uCrtcHalf );
++			}
+ 
+ 			if ( frameInfo->layers[i].applyColorMgmt )
+ 			{
+@@ -2539,20 +2577,20 @@
+ 
+ 				if ( !cv_drm_debug_disable_color_encoding && bYCbCr )
+ 				{
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "COLOR_ENCODING", entry.layerState[i].colorEncoding );
++					qkx_lset( drm, i, "COLOR_ENCODING", entry.layerState[i].colorEncoding );
+ 				}
+ 				else
+ 				{
+-					liftoff_layer_unset_property( drm->lo_layers[ i ], "COLOR_ENCODING" );
++					qkx_lunset( drm, i, "COLOR_ENCODING" );
+ 				}
+ 
+ 				if ( !cv_drm_debug_disable_color_range && bYCbCr )
+ 				{
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "COLOR_RANGE",    entry.layerState[i].colorRange );
++					qkx_lset( drm, i, "COLOR_RANGE",    entry.layerState[i].colorRange );
+ 				}
+ 				else
+ 				{
+-					liftoff_layer_unset_property( drm->lo_layers[ i ], "COLOR_RANGE" );
++					qkx_lunset( drm, i, "COLOR_RANGE" );
+ 				}
+ 
+ 				if ( drm_supports_color_mgmt( drm ) )
+@@ -2576,23 +2614,23 @@
+ 
+ 					bool bUseDegamma = !cv_drm_debug_disable_degamma_tf;
+ 					if ( bUseDegamma )
+-						liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_DEGAMMA_TF", degamma_tf );
++						qkx_lset( drm, i, "AMD_PLANE_DEGAMMA_TF", degamma_tf );
+ 					else
+-						liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_DEGAMMA_TF", 0 );
++						qkx_lset( drm, i, "AMD_PLANE_DEGAMMA_TF", 0 );
+ 
+ 					bool bUseShaperAnd3DLUT = !cv_drm_debug_disable_shaper_and_3dlut;
+ 					if ( bUseShaperAnd3DLUT )
+ 					{
+-						liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_SHAPER_LUT", drm->pending.shaperlut_id[ ColorSpaceToEOTFIndex( entry.layerState[i].colorspace ) ]->GetBlobValue() );
+-						liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_SHAPER_TF", shaper_tf );
+-						liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_LUT3D", drm->pending.lut3d_id[ ColorSpaceToEOTFIndex( entry.layerState[i].colorspace ) ]->GetBlobValue() );
++						qkx_lset( drm, i, "AMD_PLANE_SHAPER_LUT", drm->pending.shaperlut_id[ ColorSpaceToEOTFIndex( entry.layerState[i].colorspace ) ]->GetBlobValue() );
++						qkx_lset( drm, i, "AMD_PLANE_SHAPER_TF", shaper_tf );
++						qkx_lset( drm, i, "AMD_PLANE_LUT3D", drm->pending.lut3d_id[ ColorSpaceToEOTFIndex( entry.layerState[i].colorspace ) ]->GetBlobValue() );
+ 						// Josh: See shaders/colorimetry.h colorspace_blend_tf if you have questions as to why we start doing sRGB for BLEND_TF despite potentially working in Gamma 2.2 space prior.
+ 					}
+ 					else
+ 					{
+-						liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_SHAPER_LUT", 0 );
+-						liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_SHAPER_TF", 0 );
+-						liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_LUT3D", 0 );
++						qkx_lset( drm, i, "AMD_PLANE_SHAPER_LUT", 0 );
++						qkx_lset( drm, i, "AMD_PLANE_SHAPER_TF", 0 );
++						qkx_lset( drm, i, "AMD_PLANE_LUT3D", 0 );
+ 					}
+ 				}
+ 			}
+@@ -2600,43 +2638,43 @@
+ 			{
+ 				if ( drm_supports_color_mgmt( drm ) )
+ 				{
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_DEGAMMA_TF", AMDGPU_TRANSFER_FUNCTION_DEFAULT );
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_SHAPER_LUT", 0 );
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_SHAPER_TF", 0 );
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_LUT3D", 0 );
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_CTM", 0 );
++					qkx_lset( drm, i, "AMD_PLANE_DEGAMMA_TF", AMDGPU_TRANSFER_FUNCTION_DEFAULT );
++					qkx_lset( drm, i, "AMD_PLANE_SHAPER_LUT", 0 );
++					qkx_lset( drm, i, "AMD_PLANE_SHAPER_TF", 0 );
++					qkx_lset( drm, i, "AMD_PLANE_LUT3D", 0 );
++					qkx_lset( drm, i, "AMD_PLANE_CTM", 0 );
+ 				}
+ 			}
+ 
+ 			if ( drm_supports_color_mgmt( drm ) )
+ 			{
+ 				if (!cv_drm_debug_disable_blend_tf && !bSinglePlane)
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_BLEND_TF", drm->pending.output_tf );
++					qkx_lset( drm, i, "AMD_PLANE_BLEND_TF", drm->pending.output_tf );
+ 				else
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_BLEND_TF", AMDGPU_TRANSFER_FUNCTION_DEFAULT );
++					qkx_lset( drm, i, "AMD_PLANE_BLEND_TF", AMDGPU_TRANSFER_FUNCTION_DEFAULT );
+ 
+ 				if (!cv_drm_debug_disable_ctm && frameInfo->layers[i].ctm != nullptr)
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_CTM", frameInfo->layers[i].ctm->GetBlobValue() );
++					qkx_lset( drm, i, "AMD_PLANE_CTM", frameInfo->layers[i].ctm->GetBlobValue() );
+ 				else
+-					liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_CTM", 0 );
++					qkx_lset( drm, i, "AMD_PLANE_CTM", 0 );
+ 			}
+ 		}
+ 		else
+ 		{
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "FB_ID", 0 );
+-			liftoff_layer_set_property( drm->lo_layers[ i ], "IN_FENCE_FD", -1 );
++			qkx_lset( drm, i, "FB_ID", 0 );
++			qkx_lset( drm, i, "IN_FENCE_FD", -1 );
+ 
+-			liftoff_layer_unset_property( drm->lo_layers[ i ], "COLOR_ENCODING" );
+-			liftoff_layer_unset_property( drm->lo_layers[ i ], "COLOR_RANGE" );
++			qkx_lunset( drm, i, "COLOR_ENCODING" );
++			qkx_lunset( drm, i, "COLOR_RANGE" );
+ 
+ 			if ( drm_supports_color_mgmt( drm ) )
+ 			{
+-				liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_DEGAMMA_TF", AMDGPU_TRANSFER_FUNCTION_DEFAULT );
+-				liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_SHAPER_LUT", 0 );
+-				liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_SHAPER_TF", 0 );
+-				liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_LUT3D", 0 );
+-				liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_BLEND_TF", AMDGPU_TRANSFER_FUNCTION_DEFAULT );
+-				liftoff_layer_set_property( drm->lo_layers[ i ], "AMD_PLANE_CTM", 0 );
++				qkx_lset( drm, i, "AMD_PLANE_DEGAMMA_TF", AMDGPU_TRANSFER_FUNCTION_DEFAULT );
++				qkx_lset( drm, i, "AMD_PLANE_SHAPER_LUT", 0 );
++				qkx_lset( drm, i, "AMD_PLANE_SHAPER_TF", 0 );
++				qkx_lset( drm, i, "AMD_PLANE_LUT3D", 0 );
++				qkx_lset( drm, i, "AMD_PLANE_BLEND_TF", AMDGPU_TRANSFER_FUNCTION_DEFAULT );
++				qkx_lset( drm, i, "AMD_PLANE_CTM", 0 );
+ 			}
+ 		}
+ 	}
+@@ -2966,6 +3004,14 @@
+ 		drm->lo_layers[ i ] = liftoff_layer_create( lo_output );
+ 		if ( drm->lo_layers[ i ] == nullptr )
+ 			return false;
++		liftoff_layer_destroy( drm->lo_layers_split[ i ] );
++		drm->lo_layers_split[ i ] = nullptr;
++		if ( qkx_split_planes() )
++		{
++			drm->lo_layers_split[ i ] = liftoff_layer_create( lo_output );
++			if ( drm->lo_layers_split[ i ] == nullptr )
++				return false;
++		}
+ 	}
+ 
+ 	liftoff_output_destroy( drm->lo_output );
+@@ -3009,6 +3055,8 @@
+ 	{
+ 		liftoff_layer_destroy( drm->lo_layers[ i ] );
+ 		drm->lo_layers[ i ] = nullptr;
++		liftoff_layer_destroy( drm->lo_layers_split[ i ] );
++		drm->lo_layers_split[ i ] = nullptr;
+ 	}
+ 
+ 	liftoff_output_destroy(drm->lo_output);

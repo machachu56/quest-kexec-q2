@@ -1,5 +1,5 @@
 # Convenience targets. See README.md for the full procedure.
-#   make module   KDIR=... [LOCALVERSION=...]
+#   make module   KDIR=... [KSRC=...] [LOCALVERSION=...]
 #   make initramfs
 OUT ?= out
 
@@ -7,7 +7,7 @@ OUT ?= out
 all: module initramfs
 
 module:
-	$(MAKE) -C module KDIR=$(KDIR) LOCALVERSION=$(LOCALVERSION)
+	$(MAKE) -C module KDIR=$(KDIR) KSRC=$(KSRC) LOCALVERSION=$(LOCALVERSION)
 
 $(OUT)/busybox:
 	initramfs/busybox.sh $@

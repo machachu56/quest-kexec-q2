@@ -16,8 +16,8 @@
 #include <linux/msm_ion.h>
 #include <linux/kprobes.h>
 #include <soc/qcom/secure_buffer.h>
-#include "../../oculus-linux-kernel-android/drivers/staging/android/ion/ion.h"
-#include "../../oculus-linux-kernel-android/drivers/staging/android/ion/ion_system_heap.h"
+#include "ion.h"
+#include "ion_system_heap.h"
 #include "kgsl_device.h"
 
 #define SECURE_FLAGS	(ION_FLAG_SECURE | GENMASK(30, 17))

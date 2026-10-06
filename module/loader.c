@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Experimental Quest Pro ARM64 kexec module. Insertion stages by default.
+/* Experimental Quest Pro / Quest 2 (kona) ARM64 kexec module. Insertion stages by default.
  * All inputs are regular files directly under /data/local/tmp.
  * No partition/file writes and no sysfs command interface.
  */
+#include <linux/console.h>
 #include <linux/cpu.h>
 #include <linux/crc32.h>
 #include <linux/device.h>
@@ -20,6 +21,7 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/platform_device.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -64,6 +66,8 @@ static bool warm_reset_test;
 static bool flush_rpmh;
 static bool suspend_syncboss;
 static bool disconnect_qmp;
+static char *syncboss_dev = "spi0.0";
+static bool keep_ufs;
 module_param(image, charp, 0);
 module_param(initrd, charp, 0);
 module_param(dtb, charp, 0);
@@ -85,8 +89,12 @@ MODULE_PARM_DESC(warm_reset_test, "Force the running Android kernel's Qualcomm w
 module_param(flush_rpmh, bool, 0);
 MODULE_PARM_DESC(flush_rpmh, "Call the exported rpmh_flush() on the apps RSC before the final jump, mirroring the cluster-idle-enter path so the RSC hardware isn't left with stale active-set state across kexec");
 module_param(suspend_syncboss, bool, 0);
-MODULE_PARM_DESC(suspend_syncboss, "Suspend spi0.0 syncboss through its PM callback before kexec, stopping active GPI DMA");
+MODULE_PARM_DESC(suspend_syncboss, "Suspend syncboss_dev through its PM callback before kexec, stopping active GPI DMA");
 module_param(disconnect_qmp, bool, 0);
+module_param(syncboss_dev, charp, 0);
+module_param(keep_ufs, bool, 0);
+MODULE_PARM_DESC(keep_ufs, "Skip the UFS host shutdown hook so the device stays active for the target (Quest 2: a powered-down device never completes link startup after kexec)");
+MODULE_PARM_DESC(syncboss_dev, "SPI device of syncboss: spi0.0 on Quest Pro, spi1.0 on Quest 2");
 MODULE_PARM_DESC(disconnect_qmp, "Cleanly close Android AOP QMP channels and publish mcore LINK_DOWN before kexec");
 MODULE_PARM_DESC(core_hang_control, "0: untouched; 1: report secure core-hang registers; 2: clear enable bit");
 MODULE_PARM_DESC(secure_watchdog_control, "0: untouched; 1: report SCM availability; 2: try supported secure-watchdog disable signatures");
@@ -616,6 +624,72 @@ static int qkx_disconnect_aop_qmp(struct device *dev)
 	return 0;
 }
 
+/* Retained console: once execute starts, mirror the kernel log into the RAM
+ * the target's own retained log uses (same header), mapped write-combine so a
+ * watchdog bite cannot strand it in cache. The target reinitializes this RAM
+ * at console_init, so after a reset the text shows how far Android got. */
+static unsigned long log_phys = 0x9ba80000UL;
+module_param(log_phys, ulong, 0);
+MODULE_PARM_DESC(log_phys, "Retained log address (Quest 2: 0x9ba40000)");
+#define QKX_LOG_SIZE 0x10000
+static u32 *qkx_rlog;
+
+static void qkx_rlog_write(struct console *con, const char *s, unsigned int n)
+{
+	const u32 cap = QKX_LOG_SIZE - 16;
+	char *buf = (char *)qkx_rlog + 16;
+	u32 pos = qkx_rlog[1];
+
+	while (n--) {
+		buf[pos++] = *s++;
+		if (pos == cap) {
+			pos = 0;
+			qkx_rlog[2]++;
+		}
+	}
+	qkx_rlog[1] = pos;
+	wmb();
+}
+
+static struct console qkx_rlog_console = {
+	.name = "qkxrlog",
+	.write = qkx_rlog_write,
+	.flags = CON_ENABLED,
+	.index = -1,
+};
+
+static void qkx_rlog_start(void)
+{
+	struct page *pages[QKX_LOG_SIZE / PAGE_SIZE];
+	bool *initcall_debug = (void *)lookup("initcall_debug");
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(pages); i++)
+		pages[i] = pfn_to_page((log_phys >> PAGE_SHIFT) + i);
+	qkx_rlog = vmap(pages, ARRAY_SIZE(pages), VM_MAP,
+			pgprot_writecombine(PAGE_KERNEL));
+	if (!qkx_rlog)
+		return;
+	memset(qkx_rlog, 0, QKX_LOG_SIZE);
+	qkx_rlog[0] = 0x514b584c;
+	wmb();
+	register_console(&qkx_rlog_console);
+	/* device_shutdown() names each device as it goes. */
+	if (initcall_debug)
+		WRITE_ONCE(*initcall_debug, true);
+	pr_emerg("quest_kexec: retained console active at %lx\n", log_phys);
+}
+
+/* The execute path returned (aborted): never leave a console in module text. */
+static void qkx_rlog_stop(void)
+{
+	if (!qkx_rlog)
+		return;
+	unregister_console(&qkx_rlog_console);
+	vunmap(qkx_rlog);
+	qkx_rlog = NULL;
+}
+
 static int __maybe_unused qkx_execute(void)
 {
 	void (*prepare)(char *) = (void *)lookup("kernel_restart_prepare");
@@ -650,6 +724,7 @@ static int __maybe_unused qkx_execute(void)
 	bool sleep_locked = false;
 	unsigned int i;
 	int ret;
+	qkx_rlog_start();
 	qkx_phase(1, "symbol lookups returned", true);
 	if (!prepare || !migrate || !hotplug_enable || !shutdown_cpus ||
 	    !stuck || !mode)
@@ -673,7 +748,7 @@ static int __maybe_unused qkx_execute(void)
 	watchdog = find_dev(platform_bus, NULL, "17c10000.qcom,wdt");
 	usb_core = find_dev(platform_bus, NULL, "a600000.dwc3");
 	if (suspend_syncboss)
-		syncboss = find_dev(spi_bus, NULL, "spi0.0");
+		syncboss = find_dev(spi_bus, NULL, syncboss_dev);
 	if (disconnect_qmp)
 		qmp_dev = find_dev(platform_bus, NULL, "c300000.qcom,qmp-aop");
 	if (flush_rpmh)
@@ -824,6 +899,20 @@ static int __maybe_unused qkx_execute(void)
 	 * and any other kexec-aware shutdown callbacks choose the right path. */
 	if (kexec_progress)
 		WRITE_ONCE(*kexec_progress, true);
+	if (keep_ufs) {
+		/* kexec never power-cycles the UFS device the way a reboot through
+		 * the bootloader does. Leave it active; the target's host reset and
+		 * RST_n pulse then behave like a warm boot. */
+		struct device *ufs = find_dev(platform_bus, NULL, "1d84000.ufshc");
+
+		if (ufs && ufs->driver) {
+			to_platform_driver(ufs->driver)->shutdown = NULL;
+			pr_emerg("quest_kexec: UFS shutdown hook skipped\n");
+		} else {
+			pr_emerg("quest_kexec: keep_ufs: UFS host not found\n");
+		}
+		put_device(ufs);
+	}
 	qkx_phase(11, "calling kernel_restart_prepare; irreversible shutdown", false);
 	prepare(NULL);
 	qkx_phase(12, "device shutdown returned; migrating to CPU0", false);
@@ -1115,6 +1204,7 @@ out:
 		if (execute) {
 			qkx_phase(0, "entering execute path; resolving shutdown symbols", true);
 			ret = qkx_execute();
+			qkx_rlog_stop();
 		}
 #endif
 	}

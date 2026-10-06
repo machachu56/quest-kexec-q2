@@ -1,0 +1,27 @@
+diff --git a/subprojects/libliftoff/plane.c b/subprojects/libliftoff/plane.c
+index a2f637e..bf4fd68 100644
+--- a/subprojects/libliftoff/plane.c
++++ b/subprojects/libliftoff/plane.c
+@@ -407,10 +407,22 @@ plane_apply(struct liftoff_plane *plane, struct liftoff_layer *layer,
+ 			if (strcmp(layer_prop->name, "FB_DAMAGE_CLIPS") == 0) {
+ 				continue; /* Damage can be omitted */
+ 			}
++			if (strcmp(layer_prop->name, "IN_FENCE_FD") == 0 &&
++			    (int64_t)layer_prop->value == -1) {
++				continue; /* No fence; driver lacks IN_FENCE_FD (SDE) */
++			}
+ 			drmModeAtomicSetCursor(req, cursor);
+ 			return -EINVAL;
+ 		}
+ 
++		/* Qualcomm SDE exposes an 8-bit "alpha" range: scale the
++		 * standard 16-bit opaque/plane alpha down to it. */
++		if (layer_prop->core_index == LIFTOFF_PROP_ALPHA &&
++		    drmModeGetPropertyType(plane_prop) == DRM_MODE_PROP_RANGE &&
++		    plane_prop->count_values == 2 && plane_prop->values[1] < 0xFFFF) {
++			ret = plane_set_prop(plane, req, plane_prop,
++					     layer_prop->value * plane_prop->values[1] / 0xFFFF);
++		} else
+ 		ret = plane_set_prop(plane, req, plane_prop, layer_prop->value);
+ 		if (ret != 0) {
+ 			drmModeAtomicSetCursor(req, cursor);
