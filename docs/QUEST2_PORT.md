@@ -368,3 +368,19 @@ that (planes 58 + 80). Test tool: `tools/tests/ion2kms` `[secs] [cached]
 - **Next:** Steam picking up the pad; orientation from the IMUs (3DoF head
   and controllers); then SteamVR/OpenXR. Positional (6DoF) tracking needs the
   tracking cameras (SLAM / LED constellation) and is a research item.
+
+## Status 2026-10-07: tracking cameras stream on Linux
+
+- See `tools/camtrace/README.md`. Meta's camera HAL use of the Spectra driver
+  was recorded on Android (`module/qkx_camtrace.ko`) and is replayed on Linux
+  (`tools/camtrace/replay.py`) with the SyncBoss camera commands. All four
+  OV7251 cameras stream (640x480 RAW10, ~50 Hz); short "LED" exposures show
+  the controllers' infrared LED rings.
+- SyncBoss camera commands seen: 47/46/44 with mask 0x0f (cameras), type-3
+  sub-commands `a3` (period 20000 us), `ef` (exposure slots), `64`, `e2`,
+  `8f <controller id> ... 28` (controller LED timing), `a1` (exposure/gain,
+  continuously from Android's auto exposure).
+- **Do not mount `persist` (sda2) from Linux**: it reset the headset (likely
+  protected storage). Read calibration from Android instead.
+- Kernel learnt-handle substitution must ignore small values (lengths): only
+  values with a non-zero upper half, plus IOMMU handles from QUERY_CAP.
