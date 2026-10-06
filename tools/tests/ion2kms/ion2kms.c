@@ -3,7 +3,7 @@
  * Show a CPU-drawn ION buffer on the panel through msm_drm's PRIME import,
  * the same path gamescope uses for Turnip/KGSL buffers.
  *
- * Usage: ion2kms [seconds] [cached] [bars|grey] [split] [mode-index]
+ * Usage: ion2kms [seconds] [cached] [bars|grey] [split] [mode-index] [rotation]
  *   split: scan out through two half-width planes (one per layer mixer of
  *          the dual-DSI pipeline) with an atomic commit, instead of a single
  *          full-width legacy SetCrtc.
@@ -49,6 +49,8 @@ static uint32_t prop_id(int fd, uint32_t obj, uint32_t type, const char *name)
 	return id;
 }
 
+static uint64_t g_rotation = 1;
+
 static void add_plane(int fd, drmModeAtomicReq *req, uint32_t plane, uint32_t crtc,
 		      uint32_t fb, uint32_t sx, uint32_t dx, uint32_t w, uint32_t h)
 {
@@ -63,6 +65,8 @@ static void add_plane(int fd, drmModeAtomicReq *req, uint32_t plane, uint32_t cr
 	P("CRTC_Y", 0);
 	P("CRTC_W", w);
 	P("CRTC_H", h);
+	if (g_rotation != 1)
+		P("rotation", g_rotation);
 #undef P
 }
 
@@ -83,6 +87,8 @@ int main(int argc, char **argv)
 	int ion;
 	uint32_t *px;
 
+	if (argc > 6)
+		g_rotation = strtoull(argv[6], NULL, 0);
 	if (drm < 0 || drmSetMaster(drm))
 		return perror("drm"), 1;
 	drmSetClientCap(drm, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
@@ -158,6 +164,10 @@ int main(int argc, char **argv)
 			prop_id(drm, conn->connector_id, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), crtc);
 		add_plane(drm, req, planes[0], crtc, fb, 0, 0, w / 2, h);
 		add_plane(drm, req, planes[1], crtc, fb, w / 2, w / 2, w / 2, h);
+		if (drmModeAtomicCommit(drm, req, DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET, NULL)) {
+			perror("atomic test commit");
+			return 2;
+		}
 		if (drmModeAtomicCommit(drm, req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL))
 			return perror("atomic commit"), 1;
 		printf("split across planes %u and %u\n", planes[0], planes[1]);

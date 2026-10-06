@@ -56,8 +56,8 @@ if [ ! -d src ]; then
 fi
 cd src
 if [ \"\$(cat ../patches.stamp 2>/dev/null)\" != \"\$PSUM\" ]; then
-	git checkout -q . && git clean -qfd -e build
-	git submodule foreach -q 'git checkout -q . && git clean -qfd' 2>/dev/null || true
+	git reset -q --hard HEAD && git clean -qfd -e build
+	git submodule foreach -q 'git reset -q --hard HEAD && git clean -qfd' 2>/dev/null || true
 	for p in /patches/*.patch; do [ -e \"\$p\" ] && patch -sp1 < \"\$p\" && echo \"applied \${p##*/}\"; done
 	echo \"\$PSUM\" > ../patches.stamp
 fi

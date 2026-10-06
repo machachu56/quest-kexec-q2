@@ -1,0 +1,15 @@
+#!/bin/sh
+# Run an app full-screen in the Quest 2 headset through gamescope.
+# Usage: qkx-gamescope <command> [args...]
+#
+# Turnip on KGSL renders; gamescope composites one logical per-eye screen
+# (1832x1920) and shows it to both eyes, rotated for the portrait panel
+# (GAMESCOPE_QKX_*), through one plane per layer mixer (SPLIT_PLANES).
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/xdg}
+mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+export VK_ICD_FILENAMES=/usr/local/share/vulkan/icd.d/freedreno_icd.aarch64.json
+export LIBSEAT_BACKEND=${LIBSEAT_BACKEND:-noop}
+export WLR_LIBINPUT_NO_DEVICES=1
+export GAMESCOPE_DRM_SPLIT_PLANES=1 GAMESCOPE_QKX_STEREO=1 GAMESCOPE_QKX_FLIPX=1
+exec /usr/local/bin/gamescope --backend drm --prefer-output DSI-1 \
+	--force-orientation normal --force-composition -W 1920 -H 3664 -- "$@"

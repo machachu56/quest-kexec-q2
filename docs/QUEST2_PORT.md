@@ -292,3 +292,23 @@ that (planes 58 + 80). Test tool: `tools/tests/ion2kms` `[secs] [cached]
 - **Open:** the kernel-side fix for single wide planes (SDE source split with
   DSC), the panel orientation/per-eye layout and lens distortion, input
   devices, and the 1-in-4 jump failure.
+
+## Status 2026-10-07: correct per-eye image in the headset
+
+- **Problem:** the split-plane output showed the panel framebuffer as is.
+  The Quest 2 panel is one portrait 1920x3664 panel with the eyes stacked
+  along the framebuffer's y axis, each rotated by 90°, so the user saw two
+  cubes. SDE cannot rotate linear RGB planes (atomic test rejects
+  rotate-90/270).
+- `patches/gamescope/0004`: with `GAMESCOPE_QKX_STEREO=1` the composite shader
+  maps each panel pixel to its eye and to a rotated coordinate in a logical
+  per-eye screen (eyeH x panel width). That screen is scaled uniformly into the
+  normal layout, so no layout code changes. `GAMESCOPE_QKX_FLIPX=1` is the
+  correct orientation (user-confirmed: one upright cube per eye). Needs
+  `--force-composition`.
+- Launcher: `rootfs/usr/local/bin/qkx-gamescope <cmd>` (installed on the
+  headset).
+- `build-userspace.sh` now resets source trees to HEAD (it used the git
+  index, which can hold earlier patch states).
+- **Next:** lens distortion and chromatic correction in the same pass, input,
+  Steam.

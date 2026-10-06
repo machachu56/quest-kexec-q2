@@ -1,0 +1,79 @@
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index 7efcc0d..809bdc3 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -1158,6 +1158,11 @@ extern bool g_bSteamIsActiveWindow;
+ VkPipeline CVulkanDevice::pipeline(ShaderType type, uint32_t layerCount, uint32_t ycbcrMask, uint32_t blur_layers, uint32_t colorspace_mask, uint32_t output_eotf, bool itm_enable)
+ {
+ 	uint32_t effective_debug = g_uCompositeDebug;
++	static const uint32_t s_uQkxStereo =
++		( env_to_bool( getenv( "GAMESCOPE_QKX_STEREO" ) ) ? CompositeDebugFlag::QkxStereo : 0u ) |
++		( env_to_bool( getenv( "GAMESCOPE_QKX_FLIPX" ) ) ? CompositeDebugFlag::QkxFlipX : 0u ) |
++		( env_to_bool( getenv( "GAMESCOPE_QKX_FLIPY" ) ) ? CompositeDebugFlag::QkxFlipY : 0u );
++	effective_debug |= s_uQkxStereo;
+ 	if ( g_bSteamIsActiveWindow )
+ 		effective_debug &= ~(CompositeDebugFlag::Heatmap | CompositeDebugFlag::Heatmap_MSWCG | CompositeDebugFlag::Heatmap_Hard);
+ 
+diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+index a3a11a7..453515f 100644
+--- a/src/rendervulkan.hpp
++++ b/src/rendervulkan.hpp
+@@ -383,6 +383,10 @@ namespace CompositeDebugFlag
+ 	static constexpr uint32_t Heatmap_Hard = 1u << 4;
+ 	static constexpr uint32_t Markers_Partial = 1u << 5;
+ 	static constexpr uint32_t Tonemap_Reinhard = 1u << 7;
++	// Quest 2 stereo output (GAMESCOPE_QKX_STEREO): see cs_composite_blit.
++	static constexpr uint32_t QkxStereo = 1u << 8;
++	static constexpr uint32_t QkxFlipX = 1u << 9;
++	static constexpr uint32_t QkxFlipY = 1u << 10;
+ };
+ 
+ VkInstance vulkan_get_instance(void);
+diff --git a/src/shaders/cs_composite_blit.comp b/src/shaders/cs_composite_blit.comp
+index d2ef47b..0c56670 100644
+--- a/src/shaders/cs_composite_blit.comp
++++ b/src/shaders/cs_composite_blit.comp
+@@ -29,6 +29,23 @@ void main() {
+     vec2 uv = vec2(coord);
+     vec4 outputValue = vec4(0.0f);
+ 
++    if (checkDebugFlag(compositedebug_QkxStereo)) {
++        // Quest 2: one portrait panel, the two eyes stacked along y, each eye
++        // seeing its half rotated by 90 degrees. Map this panel pixel to a
++        // logical per-eye screen (eyeH x panel width), then into the normal
++        // layout space with a uniform, centred scale so aspect is preserved.
++        vec2 P = vec2(outSize);
++        float eyeH = P.y * 0.5f;
++        vec2 L = vec2(eyeH, P.x);
++        vec2 l = vec2(mod(float(coord.y), eyeH), float(coord.x));
++        if (checkDebugFlag(compositedebug_QkxFlipX))
++            l.x = L.x - 1.0f - l.x;
++        if (checkDebugFlag(compositedebug_QkxFlipY))
++            l.y = L.y - 1.0f - l.y;
++        float s = min(P.x / L.x, P.y / L.y);
++        uv = l * s + (P - L * s) * 0.5f;
++    }
++
+     if (checkDebugFlag(compositedebug_PlaneBorders))
+         outputValue = vec4(1.0f, 0.0f, 0.0f, 0.0f);
+ 
+diff --git a/src/shaders/descriptor_set.h b/src/shaders/descriptor_set.h
+index f2b8527..82144b6 100644
+--- a/src/shaders/descriptor_set.h
++++ b/src/shaders/descriptor_set.h
+@@ -35,6 +35,9 @@ const uint compositedebug_Heatmap_MSWCG = 1u << 3; // If compositedebug_Heatmap
+ const uint compositedebug_Heatmap_Hard = 1u << 4; // If compositedebug_Heatmap is set, use a heatmap with specialized hard flagging
+ const uint compositedebug_Markers_Partial = 1u << 5; // If compositedebug_Heatmap is set, use a heatmap with specialized hard flagging
+ //const uint compositedebug_Tonemap_Reinhard = 1u << 7; // Use Reinhard tonemapping instead of Uncharted.
++const uint compositedebug_QkxStereo = 1u << 8; // Quest 2: same image to both eyes, rotated for the panel
++const uint compositedebug_QkxFlipX = 1u << 9;
++const uint compositedebug_QkxFlipY = 1u << 10;
+ 
+ bool checkDebugFlag(uint flag) {
+     return (c_compositing_debug & flag) != 0;
+diff --git a/subprojects/libliftoff b/subprojects/libliftoff
+--- a/subprojects/libliftoff
++++ b/subprojects/libliftoff
+@@ -1 +1 @@
+-Subproject commit 8b08dc1c14fd019cc90ddabe34ad16596b0691f4
++Subproject commit 8b08dc1c14fd019cc90ddabe34ad16596b0691f4-dirty
