@@ -11,5 +11,9 @@ export VK_ICD_FILENAMES=/usr/local/share/vulkan/icd.d/freedreno_icd.aarch64.json
 export LIBSEAT_BACKEND=${LIBSEAT_BACKEND:-noop}
 export WLR_LIBINPUT_NO_DEVICES=1
 export GAMESCOPE_DRM_SPLIT_PLANES=1 GAMESCOPE_QKX_STEREO=1 GAMESCOPE_QKX_FLIPX=1
+# Xwayland's glamor/GLX: Zink on Turnip-KGSL from our Mesa in /usr/local (the
+# display device, msm_drm, has no GL driver of its own).
+export LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export MESA_LOADER_DRIVER_OVERRIDE=zink LIBGL_DRIVERS_PATH=/usr/local/lib/dri
 exec /usr/local/bin/gamescope --backend drm --prefer-output DSI-1 \
 	--force-orientation normal --force-composition -W 1920 -H 3664 -- "$@"

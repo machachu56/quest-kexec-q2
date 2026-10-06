@@ -312,3 +312,32 @@ that (planes 58 + 80). Test tool: `tools/tests/ion2kms` `[secs] [cached]
   index, which can hold earlier patch states).
 - **Next:** lens distortion and chromatic correction in the same pass, input,
   Steam.
+
+## Status 2026-10-07: Steam client UI in the headset (SteamOS chroot)
+
+- Valve's Frame base rootfs plus `deckard-steam-rel` etc. built by
+  `tools/steamos-rootfs.sh` into a 24 GiB ext4 image, installed with
+  `QKX_NAME=steamos tools/linux-install.sh` and run as a chroot from Alpine by
+  `qkx-steamos steam` (mirrors the image's `steam.service`, restarts on exit 42).
+- Kernel needed SysV IPC and namespaces (`quest2_target_defconfig`); the
+  Android paranoid-network groups 3003/3004 are given to the steam user.
+- Missing from Valve's public repos, now provided:
+  - GTK 2 (`steamui.so` links it): `tools/steamos/build-gtk2.sh`.
+  - The client's bundled FFmpeg is unversioned: `qkx-steam.sh` adds the
+    soname links after every self-update.
+  - GPU: `tools/build-userspace.sh mesa-holo` builds Turnip on KGSL + Zink
+    (GL 4.6, EGL, GBM, glvnd) against glibc in `qkx-holo-builder`
+    (`tools/builder/Containerfile.holo`); installed to `/usr/local` in the
+    image with `ld.so.conf.d/00-qkx-mesa.conf`. glibc 2.43 declares
+    `call_once`/`once_flag`, so Mesa 25.1's C11 emulation takes those two from
+    glibc (edit in the `mesa-holo` fetch step).
+  - Alpine-side Mesa also gained Zink, so Xwayland has glamor/GLX (Steam's
+    vgui needs a GLX visual).
+  - `lsof`: the client uses it to authenticate the web helper's localhost
+    websocket ("unexpected transport error" without it).
+  - `/etc/local.d/qkx-gpu.start` opens `/dev/kgsl-3d0`, `/dev/ion` and
+    `/dev/dri/*` to the steam user (group ids differ between Alpine and the
+    image).
+- Result (user-confirmed): the Steam sign-in screen (phone-app QR) in the
+  headset.
+- **Next:** controllers and head tracking (syncboss), SteamVR, FEX for x86.

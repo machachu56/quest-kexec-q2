@@ -1,0 +1,13 @@
+# glibc (SteamOS / Holo) build environment, on Valve's published Frame base,
+# for userspace installed into the SteamOS chroot. Build once:
+#   podman build --platform linux/arm64 -t qkx-holo-builder -f tools/builder/Containerfile.holo tools
+FROM localhost/qkx-deckard-base:latest
+COPY steamos/pacman.conf /etc/pacman.conf
+RUN pacman -Sy --noconfirm --needed base-devel meson ninja python-mako python-yaml \
+	python-packaging glslang libdrm zlib expat elfutils zstd linux-api-headers \
+	vulkan-icd-loader vulkan-headers libglvnd libx11 libxext libxfixes libxdamage \
+	libxshmfence libxrandr libxxf86vm libxcb wayland wayland-protocols \
+	xcb-util-keysyms spirv-tools bison flex ccache git patch \
+	# wayland-scanner in this base still links the old libxml2 soname.
+	libxml2-legacy >/dev/null && \
+	pacman -Scc --noconfirm >/dev/null

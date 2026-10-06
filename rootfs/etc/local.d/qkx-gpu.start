@@ -1,0 +1,5 @@
+#!/bin/sh
+# GPU/display nodes for non-root users, including the SteamOS chroot's steam
+# user, whose group ids do not match Alpine's (single-user headset).
+chmod 0666 /dev/kgsl-3d0 /dev/ion /dev/dri/card0 /dev/dri/renderD128 2>/dev/null
+exit 0

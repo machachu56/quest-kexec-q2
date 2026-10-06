@@ -14,7 +14,8 @@ OUT=$(realpath -m "${1:-$HERE/out/steamos}")
 SIZE=${2:-24}
 BASE_URL=https://steamdeck-packages.steamos.cloud/archlinux-deckard/archlinux/main/system.rootfs.zst
 PKGS="deckard-steam-rel fex-wtf xorg-xwayland vulkan-icd-loader libglvnd mesa \
-	pipewire pipewire-pulse wireplumber python sudo which jq xorg-xhost strace"
+	pipewire pipewire-pulse wireplumber python sudo which jq xorg-xhost strace \
+	gtk3 xcb-util-keysyms pciutils mesa-utils vulkan-tools lsof"
 mkdir -p "$OUT"
 
 if ! podman image exists qkx-deckard-base; then
@@ -45,6 +46,18 @@ echo packages: \$(pacman -Q | wc -l)
 "
 # Valve's real pacman.conf points at the same repos; keep ours for updates.
 podman cp "$HERE/tools/steamos/pacman.conf" qkx-steamos-build:/etc/pacman.conf
+
+# Pieces Valve's public repos lack: GTK 2 (steamui.so links it) and our Mesa
+# (Turnip on KGSL + Zink), both built by their own scripts.
+[ -f "$OUT/gtk2.tar.gz" ] || "$HERE/tools/steamos/build-gtk2.sh"
+[ -f "$HERE/out/build/mesa-holo.tar.gz" ] || "$HERE/tools/build-userspace.sh" mesa-holo
+for t in "$OUT/gtk2.tar.gz" "$HERE/out/build/mesa-holo.tar.gz"; do
+	podman cp "$t" qkx-steamos-build:/tmp/extra.tar.gz
+	podman start qkx-steamos-build >/dev/null
+	podman exec qkx-steamos-build sh -c 'tar -C / -xzf /tmp/extra.tar.gz && rm /tmp/extra.tar.gz'
+done
+podman exec qkx-steamos-build sh -c 'echo /usr/local/lib > /etc/ld.so.conf.d/00-qkx-mesa.conf && ldconfig'
+podman stop qkx-steamos-build >/dev/null
 
 # ext4 with root ownership preserved: build it inside a container.
 rm -f "$OUT/steamos.img"

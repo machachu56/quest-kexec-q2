@@ -57,9 +57,31 @@ export STEAM_LAUNCH_WRAPPER_AFFINITY_LIST=0xf8 STEAM_DESKTOP_APP_AFFINITY_LIST=0
 export STEAM_CEF_USE_AUTOMATIC_PROXY=0 STEAM_DEBUGCEF_FAKEUI=1
 export STEAM_COMPAT_TOOL_MAPPINGS="546560 100 steamrt4-any"
 export STEAM_LAUNCH_WRAPPER_AUDIO_NAMESPACE=0
+# GPU: our Mesa in /usr/local (ld.so.conf.d/00-qkx-mesa.conf puts it first,
+# since RUNSTEAM.sh overrides LD_LIBRARY_PATH): Zink for GL, Turnip on KGSL.
+export MESA_LOADER_DRIVER_OVERRIDE=zink
+export VK_ICD_FILENAMES=/usr/local/share/vulkan/icd.d/freedreno_icd.aarch64.json
 [ -f /usr/share/deckard/mesavars.sh ] && set -a && . /usr/share/deckard/mesavars.sh && set +a
 cp -u /usr/share/deckard/RUNSTEAM.sh ~/.local/share/Steam/
-exec ~/.local/share/Steam/RUNSTEAM.sh
+# The client's bundled FFmpeg is installed unversioned (libavcodec.so) but
+# its users link the sonames: add them (redone after every self-update).
+rt=~/.local/share/Steam/steamrtarm64
+for f in libavcodec libavutil libavformat libavfilter libswresample libswscale; do
+	[ -f "$rt/$f.so" ] || continue
+	s=$(objdump -p "$rt/$f.so" 2>/dev/null | awk '/SONAME/ { print $2 }')
+	[ -n "$s" ] && [ ! -e "$rt/$s" ] && ln -s "$f.so" "$rt/$s"
+done
+# steam.service has Restart=always and treats 42 ("restart me", e.g. after a
+# self-update) as success: relaunch on 42, and a few times after crashes.
+crashes=0
+while :; do
+	~/.local/share/Steam/RUNSTEAM.sh && break
+	rc=$?
+	[ "$rc" = 42 ] && continue
+	crashes=$((crashes + 1))
+	[ "$crashes" -ge 3 ] && exit "$rc"
+	sleep 2
+done
 EOF
 	chmod 755 "$R/run/qkx-steam.sh"
 	# DISPLAY is only known inside gamescope's child, so expand it there.

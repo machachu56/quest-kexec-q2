@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Incrementally build headset userspace components in the arm64 builder.
 #
-# Usage: tools/build-userspace.sh mesa|gamescope
+# Usage: tools/build-userspace.sh mesa|mesa-holo|gamescope
+#   mesa-holo: the same Mesa for the glibc SteamOS chroot (qkx-holo-builder).
 #
 # Source trees and build directories persist under out/build/<name>/, so a
 # rebuild after a patch change only recompiles what changed (plus ccache).
@@ -10,9 +11,10 @@
 # Output: out/build/<name>.tar.gz, to extract on the headset with tar -C / -xzf.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-NAME=${1:?mesa|gamescope}
+NAME=${1:?mesa|mesa-holo|gamescope}
+BUILDER=qkx-builder
 B=$HERE/out/build
-mkdir -p "$B/$NAME" "$B/ccache" "$HERE/patches/$NAME"
+mkdir -p "$B/$NAME" "$B/ccache"
 
 case "$NAME" in
 mesa)
@@ -20,10 +22,33 @@ mesa)
 	TARBALL=$HERE/out/src/mesa-$VER.tar.xz
 	[ -f "$TARBALL" ] || curl -fL -o "$TARBALL" "https://archive.mesa3d.org/mesa-$VER.tar.xz"
 	FETCH="tar xJf /src/mesa-$VER.tar.xz && mv mesa-$VER src"
-	SETUP="-Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm,kgsl -Dgallium-drivers= \
-		-Dplatforms=x11,wayland -Dglx=disabled -Degl=disabled -Dgles1=disabled -Dgles2=disabled \
-		-Dopengl=false -Dllvm=disabled -Dbuildtype=release -Dprefix=/usr/local"
-	PACK="./usr/local/lib/libvulkan_freedreno.so ./usr/local/share/vulkan"
+	# Turnip on KGSL for Vulkan, and Zink on top of it for OpenGL/GLES/EGL/GBM
+	# (Xwayland glamor, Steam's UI, GL games): there is no GL driver for KGSL.
+	SETUP="-Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm,kgsl -Dgallium-drivers=zink \
+		-Dplatforms=x11,wayland -Dglx=dri -Degl=enabled -Dgbm=enabled -Dgles1=disabled \
+		-Dgles2=enabled -Dopengl=true -Dllvm=disabled -Dglvnd=disabled \
+		-Dbuildtype=release -Dprefix=/usr/local"
+	PACK="./usr/local"
+	;;
+mesa-holo)
+	BUILDER=qkx-holo-builder
+	VER=${MESA_VERSION:-25.1.9}
+	TARBALL=$HERE/out/src/mesa-$VER.tar.xz
+	[ -f "$TARBALL" ] || curl -fL -o "$TARBALL" "https://archive.mesa3d.org/mesa-$VER.tar.xz"
+	# glibc >= 2.43 declares call_once/once_flag in <stdlib.h> (_GNU_SOURCE
+	# implies C23): keep Mesa's C11 threads emulation but take those two from
+	# glibc instead of redefining them.
+	FETCH="tar xJf /src/mesa-$VER.tar.xz && mv mesa-$VER src && \
+		perl -0pi -e 's/(typedef pthread_once_t  once_flag;\n#  define ONCE_FLAG_INIT PTHREAD_ONCE_INIT\n)/#ifndef __once_flag_defined\n\$1#endif\n/' src/src/c11/threads.h && \
+		perl -0pi -e 's/(void\ncall_once\(once_flag \*flag, void \(\*func\)\(void\)\)\n\{\n    pthread_once\(flag, func\);\n\}\n)/#ifndef __once_flag_defined\n\$1#endif\n/' src/src/c11/impl/threads_posix.c && \
+		grep -q __once_flag_defined src/src/c11/threads.h && \
+		grep -q __once_flag_defined src/src/c11/impl/threads_posix.c"
+	# glvnd: the image's libGL/libEGL dispatch to libGLX_mesa/libEGL_mesa.
+	SETUP="-Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm,kgsl -Dgallium-drivers=zink \
+		-Dplatforms=x11,wayland -Dglx=dri -Degl=enabled -Dgbm=enabled -Dgles1=disabled \
+		-Dgles2=enabled -Dopengl=true -Dllvm=disabled -Dglvnd=enabled \
+		-Dbuildtype=release -Dprefix=/usr/local"
+	PACK="./usr/local"
 	;;
 gamescope)
 	VER=${GAMESCOPE_VERSION:-3.16.4}
@@ -43,11 +68,12 @@ gamescope)
 *) echo "unknown component $NAME"; exit 1 ;;
 esac
 
-PSUM=$(cat "$HERE/patches/$NAME"/*.patch 2>/dev/null | sha256sum | cut -c1-16)
+PDIR=$HERE/patches/${NAME%-holo}
+PSUM=$(cat "$PDIR"/*.patch 2>/dev/null | sha256sum | cut -c1-16)
 podman run --rm --platform linux/arm64 -e PSUM="$PSUM" \
 	-e CCACHE_DIR=/ccache -v "$B/ccache:/ccache:Z" \
-	-v "$HERE/out/src:/src:Z" -v "$HERE/patches/$NAME:/patches:Z,ro" \
-	-v "$B/$NAME:/w:Z" -w /w qkx-builder sh -euc "
+	-v "$HERE/out/src:/src:Z" -v "$PDIR:/patches:Z,ro" \
+	-v "$B/$NAME:/w:Z" -w /w "$BUILDER" sh -euc "
 if [ ! -d src ]; then
 	$FETCH
 	cd src
