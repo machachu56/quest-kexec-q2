@@ -17,19 +17,25 @@ Engineering notes for finished items are in [docs/QUEST2_PORT.md](docs/QUEST2_PO
 
 ## Next: VR
 
-1. **3DoF tracking**: orientation for the head and both controllers from their
-   IMUs (sensor fusion; data already decoded). Gyro scale and axes to calibrate.
-2. **VR runtime**: Monado (open-source OpenXR runtime) with a Quest 2 driver
-   built on the SyncBoss streams; Monado's SteamVR plugin for SteamVR games.
-3. **Lens distortion and chromatic aberration** correction (Monado compositor
-   or the gamescope shader), with per-eye IPD.
-4. **Tracking cameras**: get the four cameras streaming on Linux. They are
-   configured through SyncBoss (the type-3 traffic in the Android trace) and
-   the Qualcomm camera stack (`/dev/video*`, `/dev/media*`).
-5. **Head 6DoF**: visual-inertial tracking with Basalt (as Monado uses it).
-6. **Controller 6DoF**: infrared LED constellation tracking (Monado has work in
-   progress for Rift S). LED models and calibration from the controllers
-   (per-controller 0x8f queries seen in the trace). Research-level.
+Done so far: tracking cameras stream on Linux (`tools/camtrace`); all
+calibration located on Android: `/persist/calibration/camera_calibration.json`
+(OV7251 pinhole + Fisheye62, DeviceFromCamera), `imu_calibration.json`, and the
+controllers' LED models in `/data/vendor/misc/sensors/controllercal/<id>`
+(Rift S style "TrackedObject" JSON: 15 LEDs with position, normal, cone).
+Copy them with `adb su` (never mount persist from Linux).
+
+1. **Camera service**: port `replay.py` to C/C++, publish frames with
+   timestamps, auto exposure (SyncBoss type-3 `a1` updates), separate the
+   normal and LED exposures.
+2. **Monado driver `quest2`**: SyncBoss IMU + controllers, the cameras, the
+   calibration above. Head: 3DoF first, then 6DoF with Basalt through Monado's
+   VIT/SLAM interface. Controllers: Monado's constellation tracker (used for
+   Rift CV1 and PS Sense) with the LED models, fused with controller IMUs.
+3. **Display path for VR**: Monado compositor output, distortion and
+   chromatic correction, shown per eye (gamescope side-by-side mode or DRM).
+4. **SteamVR**: Monado's SteamVR driver (`steamvr_drv`) in the SteamOS chroot.
+5. Tracking quality: timestamps (SyncBoss nsync vs camera SOF), calibration
+   conversion (Fisheye62 to Monado/Basalt camera models).
 
 ## Next: games and system
 
