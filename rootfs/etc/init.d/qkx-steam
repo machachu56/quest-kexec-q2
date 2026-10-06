@@ -17,7 +17,7 @@ error_log=/var/log/qkx-steam.log
 
 depend() {
 	need localmount
-	after local qkx-controllers sshd networking qkx-time
+	after local qkx-controllers sshd networking
 }
 
 start_pre() {

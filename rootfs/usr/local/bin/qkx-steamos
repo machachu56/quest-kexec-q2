@@ -87,6 +87,8 @@ while :; do
 done
 EOF
 	chmod 755 "$R/run/qkx-steam.sh"
+		# Steam needs the real time (TLS); qkx-time sets it in the background.
+	for i in $(seq 60); do [ "$(date +%Y)" -ge 2024 ] && break; sleep 1; done
 	# DISPLAY is only known inside gamescope's child, so expand it there.
 	# shellcheck disable=SC2016
 	# Xwayland only admits the user that started it (root): let steam in once

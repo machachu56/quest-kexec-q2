@@ -2,25 +2,16 @@
 # Set the clock from the network. After the kexec nothing carries the time over
 # from Android (the PMIC RTC is not kept in wall-clock time), so the system
 # starts in 1970 and every TLS certificate (Steam login, store) looks invalid.
+#
+# Runs in the background: the USB link (udhcpd hands the PC its address) must
+# come up first, and boot must not wait for an NTP server.
 description="Set the clock by NTP"
+command=/bin/sh
+command_args="-c 'until ntpd -n -q -p time.cloudflare.com || ntpd -n -q -p pool.ntp.org; do sleep 5; done; exec ntpd -n -p pool.ntp.org'"
+command_background=true
+pidfile=/run/qkx-time.pid
 
 depend() {
 	need net
-	before qkx-steam
-}
-
-start() {
-	ebegin "Setting the clock by NTP"
-	for i in 1 2 3 4 5 6; do
-		for s in time.cloudflare.com pool.ntp.org time.google.com; do
-			if timeout 5 ntpd -n -q -p "$s" >/dev/null 2>&1; then
-				eend 0 "$(date)"
-				# Keep it in sync while running.
-				ntpd -p pool.ntp.org
-				return 0
-			fi
-		done
-		sleep 5
-	done
-	eend 1 "no NTP server reachable (internet shared from the PC?)"
+	after udhcpd
 }
