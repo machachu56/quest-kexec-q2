@@ -12,6 +12,11 @@ quest_kexec-y := loader.o transition.o
 ifneq ($(KSRC),)
 obj-m += ion_secmap.o qkx_giveback.o
 ccflags-y += -I$(KSRC)/drivers/staging/android/ion -I$(KSRC)/drivers/gpu/msm
+# Camera ioctl recorder (Quest 2 research), against the Spectra camera driver.
+obj-m += qkx_camtrace.o
+CAMTRACE_CFLAGS := -I$(KSRC)/techpack/camera/include/uapi \
+	$(addprefix -I$(KSRC)/techpack/camera/drivers/,cam_req_mgr cam_smmu cam_utils cam_core cam_cpas/include)
+CFLAGS_qkx_camtrace.o += $(CAMTRACE_CFLAGS)
 endif
 # Without this define the module can only stage (execute=1 is refused).
 ccflags-y += -DQKX_ENABLE_EXPERIMENTAL_JUMP
