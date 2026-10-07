@@ -1,0 +1,87 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6556fa7..cdd3ea4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -376,6 +376,7 @@ option_with_deps(XRT_BUILD_DRIVER_REMOTE "Enable remote debugging driver" DEPEND
+ option_with_deps(XRT_BUILD_DRIVER_RIFT "Enable Oculus Rift (DK2/CV1) device driver" DEPENDS XRT_HAVE_INTERNAL_HID XRT_MODULE_CONSTELLATION_TRACKING)
+ option_with_deps(XRT_BUILD_DRIVER_RIFT_SENSOR "Enable Oculus Rift Sensor (DK2/CV1) device driver" DEPENDS XRT_BUILD_DRIVER_RIFT XRT_BUILD_DRIVER_UVC XRT_HAVE_LIBUSB)
+ option_with_deps(XRT_BUILD_DRIVER_RIFT_S "Enable Oculus Rift S device driver" DEPENDS XRT_HAVE_V4L2)
++option_with_deps(XRT_BUILD_DRIVER_QUEST2 "Enable Meta Quest 2 (quest-kexec) driver" DEPENDS XRT_HAVE_LINUX)
+ option_with_deps(XRT_BUILD_DRIVER_ROKID "Enable Rokid driver" DEPENDS "XRT_HAVE_LIBUSB")
+ option_with_deps(XRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE "Enable SteamVR Lighthouse driver" DEPENDS XRT_HAVE_LINUX XRT_MODULE_AUX_VIVE XRT_MODULE_AUX_HTC)
+ option_with_deps(XRT_BUILD_DRIVER_SURVIVE "Enable libsurvive driver" DEPENDS SURVIVE_FOUND XRT_MODULE_AUX_VIVE XRT_MODULE_AUX_HTC)
+@@ -489,6 +490,7 @@ list(
+ 	"PSSENSE"
+ 	"PSVR"
+ 	"PSVR2"
++	"QUEST2"
+ 	"REALSENSE"
+ 	"REMOTE"
+ 	"RIFT"
+diff --git a/src/xrt/drivers/CMakeLists.txt b/src/xrt/drivers/CMakeLists.txt
+index 5ec9910..e1ad5e6 100644
+--- a/src/xrt/drivers/CMakeLists.txt
++++ b/src/xrt/drivers/CMakeLists.txt
+@@ -369,6 +369,12 @@ if(XRT_BUILD_DRIVER_RIFT_SENSOR)
+ 	target_include_directories(drv_rift_sensor PUBLIC ${LIBUSB1_INCLUDE_DIRS})
+ endif()
+ 
++if(XRT_BUILD_DRIVER_QUEST2)
++	add_library(drv_quest2 STATIC quest2/q2_driver.c quest2/q2_interface.h)
++	target_link_libraries(drv_quest2 PRIVATE xrt-interfaces aux_util aux_math aux_os)
++	list(APPEND ENABLED_HEADSET_DRIVERS quest2)
++endif()
++
+ if(XRT_BUILD_DRIVER_RIFT_S)
+ 	add_library(
+ 		drv_rift_s STATIC
+diff --git a/src/xrt/targets/common/CMakeLists.txt b/src/xrt/targets/common/CMakeLists.txt
+index f3f46c9..580bb09 100644
+--- a/src/xrt/targets/common/CMakeLists.txt
++++ b/src/xrt/targets/common/CMakeLists.txt
+@@ -48,6 +48,11 @@ if(XRT_BUILD_DRIVER_RIFT_S)
+ 	target_sources(target_lists PRIVATE target_builder_rift_s.c)
+ endif()
+ 
++if(XRT_BUILD_DRIVER_QUEST2)
++	target_sources(target_lists PRIVATE target_builder_quest2.c)
++	target_link_libraries(target_lists PRIVATE drv_quest2)
++endif()
++
+ if(XRT_BUILD_DRIVER_SURVIVE OR XRT_BUILD_DRIVER_VIVE)
+ 	target_sources(target_lists PRIVATE target_builder_lighthouse.c)
+ endif()
+diff --git a/src/xrt/targets/common/target_builder_interface.h b/src/xrt/targets/common/target_builder_interface.h
+index e36c1dd..705a63b 100644
+--- a/src/xrt/targets/common/target_builder_interface.h
++++ b/src/xrt/targets/common/target_builder_interface.h
+@@ -126,6 +126,14 @@ struct xrt_builder *
+ rift_builder_create(void);
+ #endif
+ 
++#ifdef XRT_BUILD_DRIVER_QUEST2
++/*!
++ * Meta Quest 2 running Linux through quest-kexec.
++ */
++struct xrt_builder *
++t_builder_quest2_create(void);
++#endif
++
+ #ifdef T_BUILDER_RIFT_S
+ /*!
+  * The Rift S driver builder.
+diff --git a/src/xrt/targets/common/target_lists.c b/src/xrt/targets/common/target_lists.c
+index 78efb9b..320e5ba 100644
+--- a/src/xrt/targets/common/target_lists.c
++++ b/src/xrt/targets/common/target_lists.c
+@@ -112,6 +112,10 @@
+  * Builders
+  */
+ xrt_builder_create_func_t target_builder_list[] = {
++#ifdef XRT_BUILD_DRIVER_QUEST2
++    t_builder_quest2_create,
++#endif // XRT_BUILD_DRIVER_QUEST2
++
+ #ifdef T_BUILDER_QWERTY // High up to override any real hardware.
+     t_builder_qwerty_create,
+ #endif // T_BUILDER_QWERTY

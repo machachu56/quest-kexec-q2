@@ -20,6 +20,14 @@ export GAMESCOPE_QKX_SCALE=${GAMESCOPE_QKX_SCALE:-70}
 # display device, msm_drm, has no GL driver of its own).
 export LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export MESA_LOADER_DRIVER_OVERRIDE=zink LIBGL_DRIVERS_PATH=/usr/local/lib/dri
+# QKX_VR=1: a side-by-side stereo app (3664x1920, one eye per half), e.g. the
+# Monado compositor; each half goes to its own eye.
+if [ "${QKX_VR:-0}" = 1 ]; then
+	export GAMESCOPE_QKX_SBS=1
+	size="-w 3664 -h 1920"
+else
+	size="-w 1832 -h 1920"
+fi
 exec /usr/local/bin/gamescope --backend drm --prefer-output DSI-1 \
 	--force-orientation normal --force-composition -W 1920 -H 3664 \
-	-w 1832 -h 1920 ${QKX_GAMESCOPE_ARGS--e} -- "$@"
+	$size ${QKX_GAMESCOPE_ARGS--e} -- "$@"

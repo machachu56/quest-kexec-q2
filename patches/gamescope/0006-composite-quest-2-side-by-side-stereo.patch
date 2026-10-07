@@ -1,0 +1,65 @@
+diff -ruN a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+--- a/src/rendervulkan.cpp	2026-10-07 01:17:04.650869954 +0200
++++ b/src/rendervulkan.cpp	2026-10-07 01:17:04.677133740 +0200
+@@ -1162,6 +1162,8 @@
+ 		( env_to_bool( getenv( "GAMESCOPE_QKX_STEREO" ) ) ? CompositeDebugFlag::QkxStereo : 0u ) |
+ 		( env_to_bool( getenv( "GAMESCOPE_QKX_FLIPX" ) ) ? CompositeDebugFlag::QkxFlipX : 0u ) |
+ 		( env_to_bool( getenv( "GAMESCOPE_QKX_FLIPY" ) ) ? CompositeDebugFlag::QkxFlipY : 0u ) |
++		( env_to_bool( getenv( "GAMESCOPE_QKX_SBS" ) ) ? CompositeDebugFlag::QkxSbs : 0u ) |
++		( env_to_bool( getenv( "GAMESCOPE_QKX_SWAP_EYES" ) ) ? CompositeDebugFlag::QkxSwapEyes : 0u ) |
+ 		[]() -> uint32_t {
+ 			// GAMESCOPE_QKX_SCALE=<percent>: nearest of 100, 85, 70, 55.
+ 			const char *pszScale = getenv( "GAMESCOPE_QKX_SCALE" );
+diff -ruN a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+--- a/src/rendervulkan.hpp	2026-10-07 01:17:04.649276978 +0200
++++ b/src/rendervulkan.hpp	2026-10-07 01:17:04.676907930 +0200
+@@ -389,6 +389,8 @@
+ 	static constexpr uint32_t QkxFlipY = 1u << 10;
+ 	static constexpr uint32_t QkxScale1 = 1u << 11;
+ 	static constexpr uint32_t QkxScale2 = 1u << 12;
++	static constexpr uint32_t QkxSbs = 1u << 13;
++	static constexpr uint32_t QkxSwapEyes = 1u << 14;
+ };
+ 
+ VkInstance vulkan_get_instance(void);
+diff -ruN a/src/shaders/cs_composite_blit.comp b/src/shaders/cs_composite_blit.comp
+--- a/src/shaders/cs_composite_blit.comp	2026-10-07 01:17:04.646133203 +0200
++++ b/src/shaders/cs_composite_blit.comp	2026-10-07 01:17:04.674824236 +0200
+@@ -42,6 +42,17 @@
+             l.x = L.x - 1.0f - l.x;
+         if (checkDebugFlag(compositedebug_QkxFlipY))
+             l.y = L.y - 1.0f - l.y;
++        if (checkDebugFlag(compositedebug_QkxSbs)) {
++            // VR (GAMESCOPE_QKX_SBS): the app is two eye images side by side
++            // (2 * eyeH x panel width); each panel half shows its own half.
++            float eye = float(coord.y) >= eyeH ? 1.0f : 0.0f;
++            if (checkDebugFlag(compositedebug_QkxSwapEyes))
++                eye = 1.0f - eye;
++            vec2 A = vec2(2.0f * L.x, L.y);
++            vec2 a = vec2(eye * L.x + l.x, l.y);
++            float sa = min(P.x / A.x, P.y / A.y);
++            uv = a * sa + (P - A * sa) * 0.5f;
++        } else {
+         // Virtual screen size (GAMESCOPE_QKX_SCALE): shrink the image around
+         // the eye centre so it fits the field of view; black outside it.
+         float z = 1.0f;
+@@ -56,6 +67,7 @@
+         }
+         float s = min(P.x / L.x, P.y / L.y);
+         uv = l * s + (P - L * s) * 0.5f;
++        }
+     }
+ 
+     if (checkDebugFlag(compositedebug_PlaneBorders))
+diff -ruN a/src/shaders/descriptor_set.h b/src/shaders/descriptor_set.h
+--- a/src/shaders/descriptor_set.h	2026-10-07 01:17:04.648186013 +0200
++++ b/src/shaders/descriptor_set.h	2026-10-07 01:17:04.675804542 +0200
+@@ -40,6 +40,8 @@
+ const uint compositedebug_QkxFlipY = 1u << 10;
+ const uint compositedebug_QkxScale1 = 1u << 11; // virtual screen 85% (with Scale2: 55%)
+ const uint compositedebug_QkxScale2 = 1u << 12; // virtual screen 70%
++const uint compositedebug_QkxSbs = 1u << 13;      // side-by-side stereo app (VR)
++const uint compositedebug_QkxSwapEyes = 1u << 14;
+ 
+ bool checkDebugFlag(uint flag) {
+     return (c_compositing_debug & flag) != 0;

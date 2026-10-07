@@ -1,0 +1,22 @@
+#!/bin/sh
+# Run an OpenXR app in the headset through Monado (Quest 2 driver).
+# Usage: qkx-vr [app args...]     (default app: hello_xr -g Vulkan2)
+#
+# gamescope shows Monado's compositor window side by side (QKX_VR=1), Monado
+# tracks the headset and Touch controllers through SyncBoss. Stops the Steam
+# session while running (both need the display).
+APP=${*:-hello_xr -g Vulkan2}
+rc-service qkx-steam stop >/dev/null 2>&1
+export XR_RUNTIME_JSON=/usr/local/share/openxr/1/openxr_monado.json
+# gamescope offers mailbox/FIFO only.
+export XRT_COMPOSITOR_FORCE_XCB=1 XRT_COMPOSITOR_PRESENT_MODE=${XRT_COMPOSITOR_PRESENT_MODE:-mailbox}
+export XRT_LOG=${XRT_LOG:-info}
+QKX_VR=1 QKX_GAMESCOPE_ARGS= exec qkx-gamescope sh -c "
+	# monado-service watches stdin: give it a pipe, not /dev/null.
+	# Present through Xwayland: with gamescope's WSI layer the window went unmatched.
+	sleep 2147483647 | ENABLE_GAMESCOPE_WSI=0 monado-service > /tmp/monado.log 2>&1 &
+	svc=\$!
+	for i in \$(seq 50); do [ -S \${XDG_RUNTIME_DIR:-/tmp}/monado_comp_ipc ] && break; sleep 0.2; done
+	# OpenXR samples wait for a key on stdin: keep it open.
+	sleep 2147483647 | $APP
+	kill \$svc"

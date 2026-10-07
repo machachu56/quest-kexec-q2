@@ -12,3 +12,6 @@ RUN apk add --no-cache build-base meson ninja cmake git patch python3 py3-mako \
 	pixman-dev sdl2-dev spirv-headers stb wayland-protocols wayland-dev \
 	xcb-util-errors-dev xcb-util-wm-dev xwayland-dev ccache \
 	libxshmfence-dev libxrandr-dev libxcb-dev xcb-util-keysyms-dev libxext-dev libxxf86vm-dev
+# Monado (OpenXR runtime) and OpenXR samples.
+RUN apk add --no-cache eigen-dev libusb-dev hidapi-dev libbsd-dev vulkan-headers \
+	openxr-dev openxr glslang-static py3-jinja2

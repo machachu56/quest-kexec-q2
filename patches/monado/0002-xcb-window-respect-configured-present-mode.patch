@@ -1,0 +1,21 @@
+diff --git a/src/xrt/compositor/main/comp_window_xcb.c b/src/xrt/compositor/main/comp_window_xcb.c
+index 727d71f..2cb180f 100644
+--- a/src/xrt/compositor/main/comp_window_xcb.c
++++ b/src/xrt/compositor/main/comp_window_xcb.c
+@@ -483,8 +483,14 @@ create_target(const struct comp_target_factory *ctf, struct comp_compositor *c,
+ 		return false;
+ 	}
+ 
+-	COMP_DEBUG(c, "Using VK_PRESENT_MODE_IMMEDIATE_KHR for xcb window")
+-	c->settings.present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
++	/*
++	 * Keep an explicitly configured mode: nested compositors (gamescope)
++	 * offer only FIFO/mailbox.
++	 */
++	if (getenv("XRT_COMPOSITOR_PRESENT_MODE") == NULL) {
++		COMP_DEBUG(c, "Using VK_PRESENT_MODE_IMMEDIATE_KHR for xcb window")
++		c->settings.present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
++	}
+ 
+ 	*out_ct = ct;
+ 

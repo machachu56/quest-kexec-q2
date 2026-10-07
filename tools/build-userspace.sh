@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Incrementally build headset userspace components in the arm64 builder.
 #
-# Usage: tools/build-userspace.sh mesa|mesa-holo|gamescope
+# Usage: tools/build-userspace.sh mesa|mesa-holo|gamescope|monado|hello_xr
 #   mesa-holo: the same Mesa for the glibc SteamOS chroot (qkx-holo-builder).
 #
 # Source trees and build directories persist under out/build/<name>/, so a
@@ -11,7 +11,7 @@
 # Output: out/build/<name>.tar.gz, to extract on the headset with tar -C / -xzf.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-NAME=${1:?mesa|mesa-holo|gamescope}
+NAME=${1:?mesa|mesa-holo|gamescope|monado|hello_xr}
 BUILDER=qkx-builder
 B=$HERE/out/build
 mkdir -p "$B/$NAME" "$B/ccache"
@@ -65,6 +65,31 @@ gamescope)
 		"https://raw.githubusercontent.com/nothings/stb/$STB/stb_image_resize.h"
 	EXTRA="cp /src/stb_image_resize.h src/"
 	;;
+monado)
+	# OpenXR runtime with the Quest 2 driver (monado/ in this repository).
+	VER=$(cat "$HERE/patches/monado/BASE")
+	FETCH="git clone -q https://gitlab.freedesktop.org/monado/monado.git src && git -C src checkout -q $VER"
+	CONFIGURE="cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr/local \
+		-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+		-DXRT_FEATURE_SERVICE=ON -DXRT_BUILD_DRIVER_QUEST2=ON -DXRT_HAVE_OPENCV=OFF -DXRT_HAVE_SDL2=OFF \
+		-DXRT_HAVE_LIBUSB=OFF \
+		-DXRT_FEATURE_WINDOW_PEEK=OFF -DBUILD_TESTING=OFF -DBUILD_DOC=OFF"
+	PACK="./usr/local"
+	# Driver sources live in this repository; copied in before every build.
+	EXTRA_MOUNT="-v $HERE/monado:/qkx-monado:Z,ro"
+	EXTRA="cp -r /qkx-monado/drivers/quest2 src/xrt/drivers/ && cp /qkx-monado/target_builder_quest2.c src/xrt/targets/common/"
+	;;
+hello_xr)
+	# OpenXR SDK sample app, for testing the runtime (Vulkan).
+	VER=${OPENXR_VERSION:-release-1.1.47}
+	FETCH="git clone -q --depth 1 --branch $VER https://github.com/KhronosGroup/OpenXR-SDK-Source.git src"
+	CONFIGURE="cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+		-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+		-DBUILD_TESTS=ON -DBUILD_CONFORMANCE_TESTS=OFF -DPRESENTATION_BACKEND=xlib -DBUILD_WITH_WAYLAND_HEADERS=OFF"
+	PACK="./usr/local/bin/hello_xr"
+	# Its bundled jinja2 predates current markupsafe: use the system one.
+	EXTRA="rm -rf external/python/jinja2 external/python/markupsafe"
+	;;
 *) echo "unknown component $NAME"; exit 1 ;;
 esac
 
@@ -80,11 +105,12 @@ if ! podman image exists "$BUILDER"; then
 fi
 
 PDIR=$HERE/patches/${NAME%-holo}
-PSUM=$(cat "$PDIR"/*.patch 2>/dev/null | sha256sum | cut -c1-16)
+mkdir -p "$PDIR"
+PSUM=$({ cat "$PDIR"/*.patch 2>/dev/null || true; } | sha256sum | cut -c1-16)
 podman run --rm --platform linux/arm64 -e PSUM="$PSUM" \
 	-e CCACHE_DIR=/ccache -v "$B/ccache:/ccache:Z" \
 	-v "$HERE/out/src:/src:Z" -v "$PDIR:/patches:Z,ro" \
-	-v "$B/$NAME:/w:Z" -w /w "$BUILDER" sh -euc "
+	${EXTRA_MOUNT:-} -v "$B/$NAME:/w:Z" -w /w "$BUILDER" sh -euc "
 if [ ! -d src ]; then
 	$FETCH
 	cd src
@@ -99,7 +125,11 @@ if [ \"\$(cat ../patches.stamp 2>/dev/null)\" != \"\$PSUM\" ]; then
 	echo \"\$PSUM\" > ../patches.stamp
 fi
 ${EXTRA:-true}
-[ -f build/build.ninja ] || CC='ccache gcc' CXX='ccache g++' meson setup build $SETUP
+if [ -n \"${CONFIGURE:-}\" ]; then
+	[ -f build/build.ninja ] || ${CONFIGURE:-true}
+else
+	[ -f build/build.ninja ] || CC='ccache gcc' CXX='ccache g++' meson setup build ${SETUP:-}
+fi
 ninja -C build -j\$(nproc)
 rm -rf /w/inst && DESTDIR=/w/inst ninja -C build install >/dev/null
 tar -C /w/inst -czf /w/out.tar.gz $PACK
