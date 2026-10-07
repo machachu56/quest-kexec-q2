@@ -384,3 +384,23 @@ that (planes 58 + 80). Test tool: `tools/tests/ion2kms` `[secs] [cached]
   protected storage). Read calibration from Android instead.
 - Kernel learnt-handle substitution must ignore small values (lengths): only
   values with a non-zero upper half, plus IOMMU handles from QUERY_CAP.
+
+## Status 2026-10-07: first VR (Monado, 3DoF)
+
+- `monado/` holds a Monado driver (`quest2`) and builder; `patches/monado`
+  registers them (and lets the XCB window keep a configured present mode).
+  `tools/build-userspace.sh monado` builds Monado (pinned in
+  `patches/monado/BASE`) with them; `hello_xr` builds the OpenXR sample.
+- Headset: SyncBoss IMU (accel g, gyro deg/s; IMU -> headset frame swaps
+  x/y and flips z per `imu_calibration.json`) through `m_imu_3dof`, fixed
+  1.6 m height. Controllers: Oculus Touch profile, IMU ICM-42686 at
+  1024 LSB/g and 8.2 LSB/dps, axes per side from the controllers'
+  TrackedObject calibration (left (x,-z,y), right (-x,-z,-y)).
+- Display: Monado's compositor renders a 3664x1920 side-by-side XCB window
+  (through Xwayland: `ENABLE_GAMESCOPE_WSI=0`, present mode mailbox);
+  gamescope `GAMESCOPE_QKX_SBS=1` (patch 0006) shows each half to its eye.
+  Report 120 Hz (the panel mode) or the motion judders.
+- `qkx-vr [app]` runs it all (stops the Steam session). Monado needs
+  `/dev/bus/usb` to exist and is built without libusb (no USB host here).
+- User-confirmed: comfortable stereo, smooth head rotation, controllers
+  rotate correctly. Not yet: lens distortion, positions (6DoF), haptics.

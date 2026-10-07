@@ -14,6 +14,7 @@ Engineering notes for finished items are in [docs/QUEST2_PORT.md](docs/QUEST2_PO
 - [x] Headset IMU stream decoded (accelerometer, gyroscope, temperature)
 - [x] Steam starts automatically when the payload boots (`qkx-steam` service)
 - [x] README with build and run instructions; repository backup
+- [x] VR with Monado: 3DoF head, Touch controllers (rotation + inputs), `qkx-vr`
 
 ## Next: VR
 
