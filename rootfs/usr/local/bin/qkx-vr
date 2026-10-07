@@ -11,6 +11,8 @@ export XR_RUNTIME_JSON=/usr/local/share/openxr/1/openxr_monado.json
 # gamescope offers mailbox/FIFO only.
 export XRT_COMPOSITOR_FORCE_XCB=1 XRT_COMPOSITOR_PRESENT_MODE=${XRT_COMPOSITOR_PRESENT_MODE:-mailbox}
 export XRT_LOG=${XRT_LOG:-info}
+# Native per-eye resolution (Monado defaults to 140% supersampling).
+export XRT_COMPOSITOR_SCALE_PERCENTAGE=${XRT_COMPOSITOR_SCALE_PERCENTAGE:-100}
 QKX_VR=1 QKX_GAMESCOPE_ARGS= exec qkx-gamescope sh -c "
 	# monado-service watches stdin: give it a pipe, not /dev/null.
 	# Present through Xwayland: with gamescope's WSI layer the window went unmatched.

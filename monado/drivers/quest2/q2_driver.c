@@ -243,9 +243,17 @@ static void
 handle_ctrl_motion(struct q2_controller *c, uint32_t dev_us, const int16_t *v, int64_t now_ns)
 {
 	/* ICM-42686 at +-32 g / +-4000 dps: 1024 LSB/g, 8.2 LSB/(deg/s).
-	 * IMU -> controller frame per the controller calibration (y/z swap). */
-	struct xrt_vec3 accel = {v[0] / 1024.0f * G, -v[2] / 1024.0f * G, v[1] / 1024.0f * G};
-	struct xrt_vec3 gyro = {v[3] / 8.2f * DEG2RAD, -v[5] / 8.2f * DEG2RAD, v[4] / 8.2f * DEG2RAD};
+	 * IMU -> controller (LED model) frame, from the TrackedObject
+	 * calibration: the two controllers mount their IMUs mirrored. */
+	const float as = G / 1024.0f, gs = DEG2RAD / 8.2f;
+	struct xrt_vec3 accel, gyro;
+	if (c->left) {
+		accel = (struct xrt_vec3){v[0] * as, -v[2] * as, v[1] * as};
+		gyro = (struct xrt_vec3){v[3] * gs, -v[5] * gs, v[4] * gs};
+	} else {
+		accel = (struct xrt_vec3){-v[0] * as, -v[2] * as, -v[1] * as};
+		gyro = (struct xrt_vec3){-v[3] * gs, -v[5] * gs, -v[4] * gs};
+	}
 
 	int64_t ts = map_time((int64_t)dev_us * 1000, now_ns, &c->dev_offset_ns, &c->have_offset);
 	if (ts <= c->last_ns) {
@@ -475,6 +483,13 @@ q2_ctrl_get_tracked_pose(struct xrt_device *xdev,
 	return XRT_SUCCESS;
 }
 
+static xrt_result_t
+q2_ctrl_set_output(struct xrt_device *xdev, enum xrt_output_name name, const struct xrt_output_value *value)
+{
+	/* Haptics: not implemented yet (SyncBoss 0x8f commands to the controller). */
+	return XRT_SUCCESS;
+}
+
 static void
 q2_ctrl_destroy(struct xrt_device *xdev)
 {
@@ -506,6 +521,7 @@ q2_ctrl_create(struct q2_system *sys, bool left)
 
 	u_device_populate_function_pointers(&c->base, q2_ctrl_get_tracked_pose, q2_ctrl_destroy);
 	c->base.update_inputs = q2_ctrl_update_inputs;
+	c->base.set_output = q2_ctrl_set_output;
 	c->base.name = XRT_DEVICE_TOUCH_CONTROLLER;
 	c->base.device_type = left ? XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER : XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER;
 	snprintf(c->base.str, XRT_DEVICE_NAME_LEN, "Quest 2 %s Touch Controller", left ? "Left" : "Right");
@@ -626,7 +642,8 @@ q2_hmd_create(struct q2_system *sys)
 
 	hmd->base.hmd->blend_modes[0] = XRT_BLEND_MODE_OPAQUE;
 	hmd->base.hmd->blend_mode_count = 1;
-	hmd->base.hmd->screens[0].nominal_frame_interval_ns = time_s_to_ns(1.0f / 90.0f);
+	/* gamescope drives the panel at 120 Hz; match it to avoid judder. */
+	hmd->base.hmd->screens[0].nominal_frame_interval_ns = time_s_to_ns(1.0f / 120.0f);
 
 	/*
 	 * One logical side-by-side screen: each eye 1832x1920 (the panel half,
