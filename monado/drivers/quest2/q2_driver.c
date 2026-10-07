@@ -42,6 +42,7 @@
 #include "util/u_visibility_mask.h"
 
 #include "q2_interface.h"
+#include "q2_cameras.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -53,6 +54,8 @@
 #include <unistd.h>
 
 DEBUG_GET_ONCE_LOG_OPTION(q2_log, "QUEST2_LOG", U_LOGGING_INFO)
+DEBUG_GET_ONCE_OPTION(q2_camera_script, "QUEST2_CAMERA_SCRIPT", "/usr/local/share/qkx/q2-cameras.bin")
+DEBUG_GET_ONCE_OPTION(q2_dump_frames, "QUEST2_DUMP_FRAMES", NULL)
 
 #define Q2_DEBUG(...) U_LOG_IFL_D(q2_log_level, __VA_ARGS__)
 #define Q2_INFO(...) U_LOG_IFL_I(q2_log_level, __VA_ARGS__)
@@ -138,10 +141,23 @@ struct q2_hmd
 	uint32_t still_count;
 };
 
+/*!
+ * Per-camera frame statistics; frames alternate between normal exposures
+ * (head tracking) and short ones where only the controllers' LEDs show.
+ */
+struct q2_frame_stats
+{
+	struct xrt_frame_sink base;
+	int cam;
+	uint64_t frames, led_frames;
+};
+
 struct q2_system
 {
 	int refs;
 	uint64_t n_imu, n_ctrl;
+	struct q2_cameras *cameras;
+	struct q2_frame_stats stats[Q2_CAMERA_COUNT];
 	struct os_mutex lock;
 	struct os_thread_helper thread;
 	int dev_fd, stream_fd;
@@ -369,6 +385,13 @@ q2_run(void *ptr)
 		if (now > next_report) {
 			Q2_DEBUG("SyncBoss: %" PRIu64 " headset IMU, %" PRIu64 " controller packets", sys->n_imu,
 			         sys->n_ctrl);
+			if (sys->cameras != NULL) {
+				struct q2_frame_stats *st = sys->stats;
+				Q2_DEBUG("Cameras: frames (LED) %" PRIu64 " (%" PRIu64 ") %" PRIu64 " (%" PRIu64
+				         ") %" PRIu64 " (%" PRIu64 ") %" PRIu64 " (%" PRIu64 ")",
+				         st[0].frames, st[0].led_frames, st[1].frames, st[1].led_frames, st[2].frames,
+				         st[2].led_frames, st[3].frames, st[3].led_frames);
+			}
 			next_report = now + 5 * U_TIME_1S_IN_NS;
 		}
 
@@ -379,11 +402,54 @@ q2_run(void *ptr)
 }
 
 static void
+q2_frame_stats_push(struct xrt_frame_sink *sink, struct xrt_frame *xf)
+{
+	struct q2_frame_stats *st = (struct q2_frame_stats *)sink;
+	uint64_t sum = 0;
+	for (uint32_t y = 0; y < xf->height; y += 16) {
+		for (uint32_t x = 0; x < xf->width; x += 16) {
+			sum += xf->data[y * xf->stride + x];
+		}
+	}
+	uint64_t mean = sum / ((xf->height / 16) * (xf->width / 16));
+	st->frames++;
+	/* Debug: QUEST2_DUMP_FRAMES=<dir> saves a few frames per camera as PGM. */
+	const char *dump = debug_get_option_q2_dump_frames();
+	if (dump != NULL && st->frames % 25 == 0 && st->frames <= 200) {
+		char path[256];
+		snprintf(path, sizeof(path), "%s/cam%d_%03u_mean%u.pgm", dump, st->cam, (unsigned)(st->frames / 25),
+		         (unsigned)mean);
+		FILE *f = fopen(path, "wb");
+		if (f != NULL) {
+			fprintf(f, "P5\n%u %u\n255\n", xf->width, xf->height);
+			for (uint32_t y = 0; y < xf->height; y++) {
+				fwrite(xf->data + y * xf->stride, 1, xf->width, f);
+			}
+			fclose(f);
+		}
+	}
+	if (mean < 16) {
+		st->led_frames++;
+	}
+}
+
+static int
+q2_sb_send_packet(void *ctx, const uint8_t *pkt, uint32_t len)
+{
+	struct q2_system *sys = ctx;
+	if (len < 3 || len < 3u + pkt[2]) {
+		return -1;
+	}
+	return sb_send(sys, pkt[0], pkt + 3, pkt[2]);
+}
+
+static void
 q2_system_unref(struct q2_system *sys)
 {
 	if (--sys->refs > 0) {
 		return;
 	}
+	q2_cameras_stop(&sys->cameras);
 	os_thread_helper_destroy(&sys->thread);
 	close(sys->stream_fd);
 	close(sys->dev_fd);
@@ -734,6 +800,15 @@ q2_create_devices(struct xrt_device **out_hmd, struct xrt_device **out_left, str
 
 	os_thread_helper_start(&sys->thread, q2_run, sys);
 	Q2_INFO("Quest 2: SyncBoss streaming (headset IMU, Touch controllers)");
+
+	/* Tracking cameras: replay the recorded start-up if a script exists. */
+	struct xrt_frame_sink *sinks[Q2_CAMERA_COUNT];
+	for (int i = 0; i < Q2_CAMERA_COUNT; i++) {
+		sys->stats[i].base.push_frame = q2_frame_stats_push;
+		sys->stats[i].cam = i;
+		sinks[i] = &sys->stats[i].base;
+	}
+	sys->cameras = q2_cameras_start(debug_get_option_q2_camera_script(), q2_sb_send_packet, sys, sinks);
 
 	*out_hmd = &sys->hmd->base;
 	*out_left = &sys->ctrl[0]->base;

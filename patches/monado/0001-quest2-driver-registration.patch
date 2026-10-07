@@ -27,7 +27,7 @@ index 5ec9910..e1ad5e6 100644
  endif()
  
 +if(XRT_BUILD_DRIVER_QUEST2)
-+	add_library(drv_quest2 STATIC quest2/q2_driver.c quest2/q2_interface.h)
++	add_library(drv_quest2 STATIC quest2/q2_driver.c quest2/q2_interface.h quest2/q2_cameras.c quest2/q2_cameras.h)
 +	target_link_libraries(drv_quest2 PRIVATE xrt-interfaces aux_util aux_math aux_os)
 +	list(APPEND ENABLED_HEADSET_DRIVERS quest2)
 +endif()
